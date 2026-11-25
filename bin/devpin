@@ -873,6 +873,18 @@ BEGIN {
   if (text ~ literal || text ~ device || text ~ assignment) print }'
 }
 
+# check_readable <repo>: succeeds when check can list the files of <repo>; fails for a repository
+# git cannot read (a damaged .git, a GIT_DIR pointing nowhere), which must not read as clean. A
+# directory with no .git file and no .git/HEAD is not a repository: its tree is walked.
+check_readable() {
+  local repo=$1
+  if git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$repo" ls-files -co --exclude-standard -z >/dev/null 2>&1
+  else
+    [[ ! -f $repo/.git && ! -e $repo/.git/HEAD ]]
+  fi
+}
+
 # check_files <repo>: prints, NUL-separated and relative to <repo>, the files of a repository that
 # check reads. Inside git: tracked and untracked-but-not-ignored files, without embedded
 # repositories (entries ending in /) and without .devpin/. Elsewhere: a walk of the tree that skips
@@ -950,6 +962,7 @@ cmd_check() {
   local repo out total=0 repos=$(( 1 + $#PKG_DIRS ))
   local -a found
   for repo in "$ROOT" "${PKG_DIRS[@]}"; do
+    check_readable "$repo" || die "git cannot read $repo — fix the repository (git -C ${(q)repo} status shows why); an unreadable repository is not a clean one"
     out=$(check_repo "$repo")
     [[ -n $out ]] || continue
     found=( "${(@f)out}" )

@@ -283,3 +283,27 @@ pass_line() {
   assert_contains "$output" "c.mk:3:"
   assert_contains "$stderr" "3 hardcoded destinations"
 }
+
+@test "a repository git cannot read is not reported clean" {
+  line="xcodebuild $OPT '$SIM,name=iPhone 17'"
+  plant "$APP/Docs/Guide.md" "$line"
+  printf 'garbage\n' > "$APP/.git/HEAD"
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: git cannot read $APP"
+  refute_contains "$output" "No hardcoded destination"
+}
+
+@test "a GIT_DIR pointing nowhere is not reported clean" {
+  GIT_DIR="$WORK/nowhere" run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: git cannot read $APP"
+  refute_contains "$output" "No hardcoded destination"
+}
+
+@test "an unreadable package is named" {
+  printf 'garbage\n' > "$WORK/packages/pkgA/.git/HEAD"
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: git cannot read $WORK/packages/pkgA"
+}
