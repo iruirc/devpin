@@ -21,6 +21,7 @@ common_setup() {
   for v in $(compgen -e | grep '^DEVPIN_' || true); do unset "$v"; done
   PATH="$REPO/tests/helpers/bin:$REPO/bin:$PATH"
   export PATH
+  unset XCRUN_RECORD
   export STUB_SIMCTL="$REPO/tests/helpers/fixtures/simctl.txt"
   export STUB_DEVICECTL="$REPO/tests/helpers/fixtures/devicectl.txt"
   export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.com
@@ -80,4 +81,24 @@ nested_tree() {
 xcrun_calls() {
   [ -f "${XCRUN_RECORD:-/nonexistent}" ] || { echo 0; return; }
   grep -c "^$1 " "$XCRUN_RECORD" || true
+}
+
+# Assertions. Under bash 3.2 (macOS) a failing `[[ ]]` that is not the last command of a
+# test does not fail it, so never use a bare `[[ ]]` as an assertion: use these or `[ ]`.
+# assert_contains <haystack> <needle> / refute_contains <haystack> <needle> (literal match)
+assert_contains() {
+  case $1 in *"$2"*) return 0 ;; esac
+  printf 'expected to contain: %s\n--- in:\n%s\n' "$2" "$1" >&2
+  return 1
+}
+refute_contains() {
+  case $1 in *"$2"*) ;; *) return 0 ;; esac
+  printf 'expected NOT to contain: %s\n--- in:\n%s\n' "$2" "$1" >&2
+  return 1
+}
+# assert_matches <string> <extended regex>
+assert_matches() {
+  printf '%s\n' "$1" | grep -Eq -- "$2" && return 0
+  printf 'expected to match: %s\n--- in:\n%s\n' "$2" "$1" >&2
+  return 1
 }

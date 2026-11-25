@@ -5,7 +5,7 @@ setup() { common_setup; }
 @test "--version prints the version" {
   run --separate-stderr devpin --version
   [ "$status" -eq 0 ]
-  [[ "$output" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  assert_matches "$output" '^[0-9]+\.[0-9]+\.[0-9]+$'
   [ "$output" = "$(sed -n 's/^DEVPIN_VERSION="\(.*\)"$/\1/p' "$REPO/bin/devpin")" ]
 }
 
@@ -13,30 +13,30 @@ setup() { common_setup; }
   run --separate-stderr devpin
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"Usage:"* ]]
+  assert_contains "$stderr" "Usage:"
 }
 
 @test "unknown command is a wrong invocation" {
   run --separate-stderr devpin bogus
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"Usage:"* ]]
+  assert_contains "$stderr" "Usage:"
 }
 
 @test "--root without a value is a wrong invocation" {
   run --separate-stderr devpin --root
   [ "$status" -eq 2 ]
   [ -z "$output" ]
-  [[ "$stderr" == *"Usage:"* ]]
+  assert_contains "$stderr" "Usage:"
 }
 
 @test "--help prints usage on stdout" {
   run --separate-stderr devpin --help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Usage:"* ]]
+  assert_contains "$output" "Usage:"
   local c
   for c in get show list use init check; do
-    [[ "$output" == *"$c"* ]]
+    assert_contains "$output" "$c"
   done
 }
 
@@ -48,11 +48,11 @@ setup() { common_setup; }
 @test "the stub lists simulators and honours the available filter" {
   run --separate-stderr xcrun simctl list devices
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$OLD_ID"* ]]
+  assert_contains "$output" "$OLD_ID"
   run --separate-stderr xcrun simctl list devices available
   [ "$status" -eq 0 ]
-  [[ "$output" != *"$OLD_ID"* ]]
-  [[ "$output" == *"$SIM_ID"* ]]
+  refute_contains "$output" "$OLD_ID"
+  assert_contains "$output" "$SIM_ID"
 }
 
 @test "the helpers build repositories and record xcrun calls" {
