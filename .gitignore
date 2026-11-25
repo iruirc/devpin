@@ -1,0 +1,8 @@
+.DS_Store
+
+# Private sibling repositories, linked into this checkout. Each is a symlink,
+# which git treats as a file, so the patterns carry no trailing slash.
+#   SPINE.md    -> ../devpin-notes/SPINE.md     (after spine-toolkit:setup, if ever)
+#   DocsMap.md  -> ../devpin-notes/DocsMap.md
+/SPINE.md
+/DocsMap.md
