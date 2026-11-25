@@ -6,6 +6,8 @@ All notable changes to devpin are listed here. The format follows
 
 ## Unreleased
 
+## 1.0.0 — 2026-11-26
+
 ### Added
 
 - `devpin get [--slot S]` prints the destination for `xcodebuild -destination`, refusing an `id=` that
