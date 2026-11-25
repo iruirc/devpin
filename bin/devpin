@@ -451,7 +451,67 @@ cmd_get() {
   fi
   print -r -- "$RES_VALUE"
 }
-cmd_show() { die "show: not implemented" }
+DESCRIBED=""
+
+# describe <value>: sets DESCRIBED to the value plus what the device lists say about its id=. Call
+# it directly, never inside $( ... ): it may load the lists.
+describe() {
+  local value=$1 id
+  DESCRIBED=$value
+  id=$(destination_id "$value") || return 0
+  if find_device "$id"; then
+    DESCRIBED="$value ($FOUND_NAME)"
+    if [[ -n $FOUND_UNAVAILABLE ]]; then
+      DESCRIBED="$DESCRIBED ($FOUND_UNAVAILABLE)"
+    fi
+  elif [[ $SIMCTL_STATE == unavailable && $DEVICECTL_STATE == unavailable ]]; then
+    DESCRIBED="$value (simctl and devicectl unavailable)"
+  elif [[ $DEVICECTL_STATE == unavailable ]]; then
+    DESCRIBED="$value (unknown to simctl, devicectl unavailable)"
+  elif [[ $SIMCTL_STATE == unavailable ]]; then
+    DESCRIBED="$value (unknown to devicectl, simctl unavailable)"
+  else
+    DESCRIBED="$value (unknown id)"
+  fi
+  return 0
+}
+
+# show_repo <dir>: the rows of one repository, one per slot (main first).
+show_repo() {
+  local dir=$1 label slot
+  label=$(repo_label "$dir")
+  known_slots "$dir"
+  for slot in "" "${KNOWN_SLOTS[@]}"; do
+    resolve "$dir" "$slot"
+    if [[ $RES_SOURCE == missing ]]; then
+      printf '%-24s %-10s %-8s %s\n' "$label" "${slot:-main}" missing -
+    else
+      describe "$RES_VALUE"
+      printf '%-24s %-10s %-8s %s\n' "$label" "${slot:-main}" "$RES_SOURCE" "$DESCRIBED"
+    fi
+  done
+}
+
+cmd_show() {
+  (( $# == 0 )) || usage
+  find_root
+  load_config "$ROOT"
+  collect_packages
+
+  local dir
+  show_repo "$ROOT"
+  for dir in "${PKG_DIRS[@]}"; do
+    if [[ -d $dir/.devpin ]]; then
+      show_repo "$dir"
+    else
+      printf '%-24s %s\n' "$(repo_label "$dir")" "(no .devpin/)"
+    fi
+  done
+  for dir in "${PKG_SKIPPED[@]}"; do
+    printf '%-24s %s\n' "$(repo_label "$dir")" "(no Package.swift — skipped)"
+  done
+  return 0
+}
 cmd_list()  { die "list: not implemented" }
 cmd_use()   { die "use: not implemented" }
 cmd_init()  { die "init: not implemented" }
