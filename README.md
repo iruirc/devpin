@@ -19,8 +19,6 @@ xcodebuild test -scheme MyApp -destination "$(devpin get)"
 
 One zsh script, macOS only, installed with Homebrew.
 
-**Status:** 1.0 in development.
-
 ## Install
 
 ```sh
@@ -49,7 +47,7 @@ Every repository, the app and each package, keeps its choice in `.devpin/` at it
 | `local` | the main slot, this machine's choice | no |
 | `<slot>.default` | optional, the same for a named slot | yes |
 | `<slot>.local` | the same, this machine's choice | no |
-| `config` | the format below; required only where `use` and `check` run | yes |
+| `config` | the format below; optional, none is an empty config (no packages, slots from files) | yes |
 
 The repository's `.gitignore` holds `.devpin/*local`; `devpin init` adds the line, and `devpin use`
 warns when git does not ignore the file it wrote.
@@ -74,13 +72,13 @@ check-ignore Docs/**    paths check does not read, relative to the root
 - `requires` takes `major.minor` or `major.minor.patch`, compared part by part as numbers (a project
   requiring `1.10` refuses devpin 1.9.0); a missing part counts as 0. A project that needs a newer
   devpin is reported as that, whatever else its `config` holds.
-- A slot name is `a-z`, `0-9` and `-`.
+- A slot name is `a-z`, `0-9` and `-`, and does not start with `-`.
 - `packages` matches that hold no `Package.swift` are skipped, and `devpin show` names them. A pattern
   that matches nothing warns. No `packages` line means the root alone.
 - `check-ignore` paths are relative to the root of the app, even when they reach into a package:
   `../packages/Core/Docs/**` beside the app, `packages/Core/Docs/**` inside it.
-- A missing `.devpin/config` is an empty config: `get`, `show` and `list` work without one. A package
-  has no `config` of its own; it follows the app's.
+- A missing `.devpin/config` is an empty config: every command works without one. A package has no
+  `config` of its own; it follows the app's.
 
 ## Which repository is read
 
@@ -180,8 +178,11 @@ It writes `.devpin/local` (or `S.local`) in the app and in every package of `con
 writes the app alone. Each write is atomic: a temporary file beside the target, then `mv`.
 
 - A name two devices share, or one nobody has, is refused before anything is written, with the
-  candidates listed. `booted` is always refused: with two simulators booted it would pick either.
+  candidates listed. `booted` is refused too (exit 1): with two simulators booted it would pick either; pass a
+  name or UDID.
 - Exit 1 when any repository was not written; the others still are.
+- When `DEVPIN_DESTINATION` (or `DEVPIN_DESTINATION_<S>` for a slot) is set, it still wins over the
+  file: `use` writes, and warns that the variable overrides what it wrote.
 - A `local` file that `git check-ignore` does not ignore gets a warning naming the line to add; the
   write still happens.
 
@@ -224,9 +225,17 @@ written into scripts, Makefiles, CI files, Markdown with commands in it, Swift.
 - `name=` or `id=` inside a `platform=…` string, unless the value is `$…` or `<…>`;
 - a literal value assigned to `DESTINATION`, `DEST` or `SIMULATOR` with `=`, `:=`, `?=` or `+=`.
 
-**What passes:** a destination that names only the host platform (macOS), `generic/…`, a variable or a
-command substitution (`-destination "$(devpin get)"`), a placeholder, and a device in prose ("measured on
-iPhone 17 Pro").
+**What passes:** a destination that names only the host platform (macOS) or is `generic/…`, also
+when assigned (`DESTINATION=generic/platform=iOS`); a key whose value is a variable, a command
+substitution or a placeholder (`-destination "$(devpin get)"`, `-destination "id=$UDID"`); a device
+value that is Swift interpolation, a `printf` format or a template (`\(udid)`, `%s`, `{{device}}`); and a
+device in prose ("measured on iPhone 17 Pro").
+
+A literal assigned to `DESTINATION`, `DEST` or `SIMULATOR` is a finding whatever it holds: `DEST=dist`
+in a Makefile is reported too. Name such a file in `check-ignore`, or rename the variable.
+
+A repository that git cannot read (a damaged `.git`, a `GIT_DIR` pointing nowhere) is not reported
+clean: `check` exits 1 and names it.
 
 **Output.** `path:line:text` per finding, grouped by repository and relative to the app's root, then a
 total and the fix. Colour only when stdout is a terminal.
