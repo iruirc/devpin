@@ -138,7 +138,12 @@ release() {
     print -r -- "  scripts/release.sh tap $version"
     return 0
   fi
-  git push origin main "v$version" || refuse "push failed"
+  if ! git push origin main "v$version"; then
+    print -u2 -r -- "release: push failed — the release is committed and tagged here. Once the cause is fixed, finish with:"
+    print -u2 -r -- "  git push origin main v$version"
+    print -u2 -r -- "  scripts/release.sh tap $version"
+    exit 1
+  fi
   tap_step "$version"
 }
 

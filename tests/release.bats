@@ -52,6 +52,9 @@ EOF
   rm -rf "$WORK/devpin/bin" "$WORK/devpin/scripts"
   cp -R "$REPO/bin" "$REPO/scripts" "$WORK/devpin/"
   cp "$REPO/CHANGELOG.md" "$REPO/README.md" "$WORK/devpin/"
+  # independent of the real history: no inherited tags, and a version below every release under test
+  git -C "$WORK/devpin" tag -l | while read -r t; do git -C "$WORK/devpin" tag -d "$t" >/dev/null; done
+  sed -i '' 's/^DEVPIN_VERSION=.*/DEVPIN_VERSION="0.0.0"/' "$WORK/devpin/bin/devpin"
   git -C "$WORK/devpin" add -A
   git -C "$WORK/devpin" commit -q --allow-empty -m "working tree"
   git -C "$WORK/devpin" switch -q -C main
@@ -248,4 +251,17 @@ brew_log() { cat "$STUB_BREW_LOG"; }
   [ "$status" -eq 2 ]
   run --separate-stderr release '' tap 1.0
   [ "$status" -eq 2 ]
+}
+
+@test "a rejected push says how to finish" {
+  printf '#!/bin/sh\nexit 1\n' > "$WORK/origin.git/hooks/pre-receive"
+  chmod +x "$WORK/origin.git/hooks/pre-receive"
+  run --separate-stderr release 'y\n' 1.0.0
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "release: push failed"
+  assert_contains "$stderr" "git push origin main v1.0.0"
+  assert_contains "$stderr" "scripts/release.sh tap 1.0.0"
+  [ "$(clone_tags)" = v1.0.0 ]
+  [ -z "$(origin_tags)" ]
+  refute_contains "$(brew_log)" "bump-formula-pr"
 }
