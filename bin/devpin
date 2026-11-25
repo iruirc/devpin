@@ -25,18 +25,159 @@ USAGE
 
 usage() { usage_text >&2; exit 2 }
 
+# ---------------------------------------------------------------- root
+
+ROOT=""
+ROOT_OPT=""
+
+# find_root: sets ROOT, the physical absolute path of the directory holding .devpin/, or dies.
+find_root() {
+  if [[ -n $ROOT_OPT ]]; then
+    [[ -d ${ROOT_OPT:A}/.devpin ]] || die "no .devpin/ in ${ROOT_OPT:A} (named by --root) — run devpin init"
+    ROOT=${ROOT_OPT:A}
+    return 0
+  fi
+
+  local start=$PWD:A top dir
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=/
+  top=${top:A}
+
+  dir=$start
+  while true; do
+    if [[ -d $dir/.devpin ]]; then
+      ROOT=$dir
+      return 0
+    fi
+    [[ $dir == $top || $dir == / ]] && break
+    dir=${dir:h}
+  done
+  die "no .devpin/ in $start or above it, up to $top — run devpin init"
+}
+
+# ---------------------------------------------------------------- values
+
+# read_value <file>: prints the first non-blank line, trimmed of whitespace and CR;
+# returns 1 when the file is absent or holds no such line.
+read_value() {
+  local file=$1 line
+  [[ -f $file ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line##[[:space:]]#}
+    line=${line%%[[:space:]]#}
+    if [[ -n $line ]]; then
+      print -r -- "$line"
+      return 0
+    fi
+  done < "$file"
+  return 1
+}
+
+# env_name [slot]: the environment variable of a slot (the main slot when empty).
+env_name() {
+  if [[ -z ${1:-} ]]; then
+    print -r -- DEVPIN_DESTINATION
+  else
+    local s=${(U)1}
+    print -r -- "DEVPIN_DESTINATION_${s//-/_}"
+  fi
+}
+
+RES_VALUE=""
+RES_SOURCE=""       # env | local | default | main | missing
+RES_PLACE=""        # the variable or file a person edits
+RES_MAIN_SOURCE=""  # when RES_SOURCE is main: env | local | default
+
+# resolve_own <repo> [slot]: rows 1-3 of the resolution table for one slot, no fallback.
+# Sets RES_VALUE, RES_SOURCE, RES_PLACE; RES_SOURCE is missing when nothing holds a value.
+resolve_own() {
+  local repo=$1 slot=${2:-} var prefix=""
+  [[ -n $slot ]] && prefix="$slot."
+
+  var=$(env_name "$slot")
+  if [[ -n ${(P)var:-} ]]; then
+    RES_VALUE=${(P)var}; RES_SOURCE=env; RES_PLACE=$var
+    return 0
+  fi
+
+  local kind
+  for kind in local default; do
+    if RES_VALUE=$(read_value "$repo/.devpin/$prefix$kind"); then
+      RES_SOURCE=$kind; RES_PLACE="$repo/.devpin/$prefix$kind"
+      return 0
+    fi
+  done
+
+  RES_VALUE=""; RES_SOURCE=missing; RES_PLACE="$repo/.devpin/${prefix}default"
+  return 1
+}
+
+# resolve <repo> [slot]: sets RES_VALUE, RES_SOURCE, RES_PLACE (and RES_MAIN_SOURCE on a
+# fallback). Always returns 0; check RES_SOURCE for missing.
+resolve() {
+  local repo=$1 slot=${2:-}
+  RES_MAIN_SOURCE=""
+  resolve_own "$repo" "$slot" && return 0
+  if [[ -n $slot ]]; then
+    local missing_place=$RES_PLACE
+    if resolve_own "$repo" ""; then
+      RES_MAIN_SOURCE=$RES_SOURCE
+      RES_SOURCE=main
+      RES_PLACE="$RES_PLACE (no $slot device of its own)"
+      return 0
+    fi
+    RES_PLACE=$missing_place
+  fi
+  return 0
+}
+
+FIX_HINT=""
+
+# fix_hint [slot]: sets FIX_HINT, the command or edit that changes the value just resolved.
+fix_hint() {
+  local slot=${1:-}
+  case $RES_SOURCE in
+    env)
+      FIX_HINT="change or unset $RES_PLACE"
+      ;;
+    main)
+      if [[ $RES_MAIN_SOURCE == env ]]; then
+        FIX_HINT="change or unset DEVPIN_DESTINATION, or devpin use --slot $slot <device> for $slot alone"
+      else
+        FIX_HINT="devpin use <device> fixes both, devpin use --slot $slot <device> $slot alone"
+      fi
+      ;;
+    local|default)
+      if [[ -n $slot ]]; then
+        FIX_HINT="devpin use --slot $slot <device>"
+      else
+        FIX_HINT="devpin use <device>"
+      fi
+      ;;
+    *)
+      FIX_HINT="write the device into .devpin/default, or run devpin use <device>"
+      ;;
+  esac
+}
+
 # ---------------------------------------------------------------- commands
 
-cmd_get()   { die "get: not implemented" }
-cmd_show()  { die "show: not implemented" }
+cmd_get() {
+  (( $# == 0 )) || usage
+  find_root
+  resolve "$ROOT"
+  if [[ $RES_SOURCE == missing ]]; then
+    fix_hint
+    die "no destination for $ROOT: DEVPIN_DESTINATION is unset and .devpin/local and .devpin/default hold no value — $FIX_HINT"
+  fi
+  print -r -- "$RES_VALUE"
+}
+cmd_show() { die "show: not implemented" }
 cmd_list()  { die "list: not implemented" }
 cmd_use()   { die "use: not implemented" }
 cmd_init()  { die "init: not implemented" }
 cmd_check() { die "check: not implemented" }
 
 # ---------------------------------------------------------------- dispatcher
-
-ROOT_OPT=""
 
 main() {
   while (( $# > 0 )); do
