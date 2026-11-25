@@ -853,18 +853,23 @@ CHECK_PLAT="platform""="
 CHECK_PATTERN="$CHECK_OPT|$CHECK_PLAT|DEST|SIMULATOR"
 
 # classify: filters `grep -n -H` lines (path:line:text), keeping those that write a device into a
-# command. A destination naming only a platform (macOS) is allowed; a destination that is a
-# variable, a command substitution or a placeholder is not a hardcoded one.
+# command. Not hardcoded: a destination naming only a platform (macOS) or generic/..., whether it
+# follows the option or is assigned; a key whose value is a variable or a placeholder ($..., <...>);
+# a device value that is Swift interpolation, a printf format or a template (\(..., %..., {...).
 classify() {
   awk -v opt="$CHECK_OPT" -v plat="$CHECK_PLAT" '
 BEGIN {
   q = "[\"\047]?"
+  head       = "(^|[^A-Za-z0-9_])(DESTINATION|DEST|SIMULATOR)[[:space:]]*[:?+]?=[[:space:]]*"
   allowed    = opt "[[:space:]=]+" q plat "macOS"
+  allowed_as = head q "(generic/|" plat "macOS)"
+  allowed_kv = opt "[[:space:]=]+" q "[A-Za-z]+=" q "[$<]"
   literal    = opt "[[:space:]=]+" q "[A-Za-z]+="
-  device     = plat "[^\"\047$]*,[[:space:]]*(name|id)=[^$<\"\047[:space:],)]"
-  assignment = "(^|[^A-Za-z0-9_])(DESTINATION|DEST|SIMULATOR)[[:space:]]*[:?+]?=[[:space:]]*" q "[A-Za-z]"
+  device     = plat "[^\"\047$]*,[[:space:]]*(name|id)=[^$<\"\047[:space:],)\\\\%{]"
+  assignment = head q "[A-Za-z]"
 }
-{ text = $0; sub(/^[^:]*:[0-9]+:/, "", text); gsub(allowed, "", text)
+{ text = $0; sub(/^[^:]*:[0-9]+:/, "", text)
+  gsub(allowed, "", text); gsub(allowed_as, "", text); gsub(allowed_kv, "", text)
   if (text ~ literal || text ~ device || text ~ assignment) print }'
 }
 

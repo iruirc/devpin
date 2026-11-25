@@ -240,3 +240,46 @@ plant() {
   [ "$status" -eq 2 ]
   assert_contains "$stderr" "Usage"
 }
+
+# every line of a "passes" test is its own case: one finding anywhere fails the test, so the
+# case is named in the failing output.
+pass_line() {
+  rm -f "$APP/Docs/Case.md"
+  plant "$APP/Docs/Case.md" "$1"
+  run --separate-stderr devpin check
+  if [ "$status" -ne 0 ]; then
+    printf 'expected to pass: %s\n%s\n' "$1" "$output" >&2
+    return 1
+  fi
+}
+
+@test "the macOS and generic exemptions hold for assigned values" {
+  pass_line "DESTINATION=generic/${PLAT}iOS"
+  pass_line "DESTINATION=\"${PLAT}macOS\""
+  pass_line "DEST := ${PLAT}macOS,arch=arm64"
+  pass_line "DEST ?= 'generic/${PLAT}iOS Simulator'"
+}
+
+@test "a key whose value is a variable or a placeholder passes after the option" {
+  pass_line "xcodebuild test $OPT \"id=\$UDID\""
+  pass_line "xcodebuild test $OPT id=\${UDID}"
+  pass_line "xcodebuild test $OPT 'name=<device>'"
+}
+
+@test "a device value that is interpolation, a format or a template passes" {
+  pass_line "let d = \"${SIM},id=\\(udid)\""
+  pass_line "printf '${SIM},name=%s' \"\$1\""
+  pass_line "dest: ${SIM},name={{device}}"
+}
+
+@test "a plain literal assigned to DEST or SIMULATOR is still a finding" {
+  plant "$APP/a.mk" "DEST=dist"
+  plant "$APP/b.mk" "DEST := build/Release"
+  plant "$APP/c.mk" "${SIMVAR} := iPhone 17"
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "a.mk:3:DEST=dist"
+  assert_contains "$output" "b.mk:3:DEST := build/Release"
+  assert_contains "$output" "c.mk:3:"
+  assert_contains "$stderr" "3 hardcoded destinations"
+}
