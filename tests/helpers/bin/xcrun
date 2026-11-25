@@ -1,0 +1,21 @@
+#!/bin/bash
+# Stand-in for xcrun: answers only `simctl list devices [available]` and `devicectl list devices`.
+echo "${1-} ${2-} ${3-}" >> "${XCRUN_RECORD:-/dev/null}"
+case "${1-} ${2-} ${3-}" in
+  "simctl list devices")
+    [ -f "${STUB_SIMCTL-}" ] || exit 1
+    if [ "${4-}" = available ]; then
+      grep -v '(unavailable' "$STUB_SIMCTL" || true
+    else
+      cat "$STUB_SIMCTL"
+    fi
+    ;;
+  "devicectl list devices")
+    [ -s "${STUB_DEVICECTL-}" ] || exit 1
+    cat "$STUB_DEVICECTL"
+    ;;
+  *)
+    echo "unexpected xcrun $*" >&2
+    exit 64
+    ;;
+esac

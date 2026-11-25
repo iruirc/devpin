@@ -1,0 +1,5 @@
+Other Phone                     00008120-000AAAABBBBCCCC10 (UDID)               physical    iOS
+Dev Phone                       00008120-000AAAABBBBCCCC1 (UDID)                physical    iOS
+Test Phone (dup)                11111111-2222-3333-4444-555555555555 (UDID)   simulated   iOS
+Twin Phone                      AAAAAAAA-0000-0000-0000-000000000001 (UDID)   simulated   iOS
+My Watch                        00008310-000DDDDEEEEFFFF1 (UDID)                physical    watchOS

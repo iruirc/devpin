@@ -1,0 +1,10 @@
+== Devices ==
+-- iOS 27.0 --
+    Test Phone (99999999-0000-0000-0000-000000000000-X) (Shutdown)
+    Test Phone (dup) (11111111-2222-3333-4444-555555555555) (Booted)
+    Twin Phone (AAAAAAAA-0000-0000-0000-000000000001) (Shutdown)
+    Old Phone (BBBBBBBB-0000-0000-0000-000000000000) (Shutdown) (unavailable, runtime profile not found)
+-- iOS 26.0 --
+    Twin Phone (AAAAAAAA-0000-0000-0000-000000000002) (Shutdown) 
+-- watchOS 12.0 --
+    Test Watch (CCCCCCCC-0000-0000-0000-000000000000) (Shutdown)

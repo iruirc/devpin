@@ -1,0 +1,69 @@
+#!/bin/zsh
+# devpin - keeps the xcodebuild destination of a repository in .devpin/
+setopt no_unset pipe_fail extended_glob
+
+DEVPIN_VERSION="0.0.0"
+
+# ---------------------------------------------------------------- messages
+
+die()  { print -u2 -r -- "devpin: $*"; exit 1 }
+warn() { print -u2 -r -- "devpin: warning: $*" }
+
+usage_text() {
+  cat <<'USAGE'
+Usage: devpin [--root <dir>] <command>
+  get [--slot S]                          print the destination
+  show                                    every repository, slot, value and source
+  list                                    available simulators and paired phones
+  use [--slot S] [--only-root] <device>   write the choice into .devpin/*local
+  use [--slot S] [--only-root] --reset    remove it
+  init [--default <device>]               create .devpin/
+  check                                   find devices written into commands
+  --version
+USAGE
+}
+
+usage() { usage_text >&2; exit 2 }
+
+# ---------------------------------------------------------------- commands
+
+cmd_get()   { die "get: not implemented" }
+cmd_show()  { die "show: not implemented" }
+cmd_list()  { die "list: not implemented" }
+cmd_use()   { die "use: not implemented" }
+cmd_init()  { die "init: not implemented" }
+cmd_check() { die "check: not implemented" }
+
+# ---------------------------------------------------------------- dispatcher
+
+ROOT_OPT=""
+
+main() {
+  while (( $# > 0 )); do
+    case $1 in
+      --root)
+        (( $# >= 2 )) || usage
+        ROOT_OPT=$2
+        shift 2
+        ;;
+      *) break ;;
+    esac
+  done
+
+  (( $# > 0 )) || usage
+  local cmd=$1
+  shift
+  case $cmd in
+    get)     cmd_get "$@" ;;
+    show)    cmd_show "$@" ;;
+    list)    cmd_list "$@" ;;
+    use)     cmd_use "$@" ;;
+    init)    cmd_init "$@" ;;
+    check)   cmd_check "$@" ;;
+    --version) print -r -- "$DEVPIN_VERSION" ;;
+    -h|--help) usage_text ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"
