@@ -214,3 +214,222 @@ expect_slot_value() {
   run --separate-stderr devpin get --slot 'a b'
   [ "$status" -eq 2 ]
 }
+
+@test "an empty slot name is a wrong invocation" {
+  put "$WORK/repo" default "$DEFAULT_DEST"
+  run --separate-stderr devpin get --slot ''
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  assert_contains "$stderr" "Usage:"
+}
+
+# ---- device lists: an id nothing answers to is refused
+
+# expect_refused <args...>: get is refused (exit 1, nothing on stdout); stderr is left in $stderr.
+expect_refused() {
+  run --separate-stderr devpin get "$@"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "refuses an unknown id from local" {
+  put "$WORK/repo" local "$SIM,id=$GONE_ID"
+  expect_refused
+  assert_contains "$stderr" "devpin: no simulator or paired device with id $GONE_ID on this machine — "
+  assert_contains "$stderr" "$SIM,id=$GONE_ID comes from $WORK/repo/.devpin/local"
+  assert_contains "$stderr" "devpin use <device>"
+  assert_contains "$stderr" "(devpin list shows the devices)"
+}
+
+@test "refuses an unknown id from default" {
+  put "$WORK/repo" default "$SIM,id=$GONE_ID"
+  expect_refused
+  assert_contains "$stderr" "id $GONE_ID "
+  assert_contains "$stderr" "comes from $WORK/repo/.devpin/default"
+  assert_contains "$stderr" "devpin use <device>"
+}
+
+@test "refuses an unknown id from env" {
+  export DEVPIN_DESTINATION="$SIM,id=$GONE_ID"
+  put "$WORK/repo" local "$A"
+  expect_refused
+  assert_contains "$stderr" "id $GONE_ID "
+  assert_contains "$stderr" "comes from DEVPIN_DESTINATION"
+  assert_contains "$stderr" "change or unset DEVPIN_DESTINATION"
+}
+
+@test "slot refuses an unknown id from its local" {
+  put "$WORK/repo" config 'slot runner'
+  put "$WORK/repo" runner.local "$SIM,id=$GONE_ID"
+  expect_refused --slot runner
+  assert_contains "$stderr" "id $GONE_ID "
+  assert_contains "$stderr" "comes from $WORK/repo/.devpin/runner.local"
+  assert_contains "$stderr" "devpin use --slot runner <device>"
+}
+
+@test "slot refuses an unknown id from its env" {
+  put "$WORK/repo" config 'slot runner'
+  export DEVPIN_DESTINATION_RUNNER="$SIM,id=$GONE_ID"
+  expect_refused --slot runner
+  assert_contains "$stderr" "comes from DEVPIN_DESTINATION_RUNNER"
+  assert_contains "$stderr" "change or unset DEVPIN_DESTINATION_RUNNER"
+}
+
+@test "slot falling back to main names both fixes" {
+  put "$WORK/repo" config 'slot runner'
+  put "$WORK/repo" local "$SIM,id=$GONE_ID"
+  expect_refused --slot runner
+  assert_contains "$stderr" "id $GONE_ID "
+  assert_contains "$stderr" "comes from $WORK/repo/.devpin/local (no runner device of its own)"
+  assert_contains "$stderr" "devpin use <device> fixes both, devpin use --slot runner <device> runner alone"
+}
+
+@test "slot falling back to an env main" {
+  put "$WORK/repo" config 'slot runner'
+  export DEVPIN_DESTINATION="$SIM,id=$GONE_ID"
+  expect_refused --slot runner
+  assert_contains "$stderr" "comes from DEVPIN_DESTINATION (no runner device of its own)"
+  assert_contains "$stderr" "change or unset DEVPIN_DESTINATION, or devpin use --slot runner <device> for runner alone"
+}
+
+# expect_unavailable <place> <fix> <args...>: the simulator is listed but unavailable.
+expect_unavailable() {
+  local place=$1 fix=$2
+  shift 2
+  expect_refused "$@"
+  assert_contains "$stderr" "devpin: simulator Old Phone with id $OLD_ID is unavailable (runtime profile not found) — "
+  assert_contains "$stderr" "$SIM,id=$OLD_ID comes from $place"
+  assert_contains "$stderr" "$fix"
+  assert_contains "$stderr" "(devpin list shows the devices)"
+}
+
+@test "refuses an unavailable simulator from local" {
+  put "$WORK/repo" local "$SIM,id=$OLD_ID"
+  expect_unavailable "$WORK/repo/.devpin/local" "devpin use <device>"
+}
+
+@test "refuses an unavailable simulator from default" {
+  put "$WORK/repo" default "$SIM,id=$OLD_ID"
+  expect_unavailable "$WORK/repo/.devpin/default" "devpin use <device>"
+}
+
+@test "refuses an unavailable simulator from env" {
+  mkdir -p "$WORK/repo/.devpin"
+  export DEVPIN_DESTINATION="$SIM,id=$OLD_ID"
+  expect_unavailable DEVPIN_DESTINATION "change or unset DEVPIN_DESTINATION"
+}
+
+@test "slot refuses an unavailable simulator from its local" {
+  put "$WORK/repo" config 'slot runner'
+  put "$WORK/repo" runner.local "$SIM,id=$OLD_ID"
+  expect_unavailable "$WORK/repo/.devpin/runner.local" "devpin use --slot runner <device>" --slot runner
+}
+
+@test "slot refuses an unavailable simulator from its env" {
+  put "$WORK/repo" config 'slot runner'
+  export DEVPIN_DESTINATION_RUNNER="$SIM,id=$OLD_ID"
+  expect_unavailable DEVPIN_DESTINATION_RUNNER "change or unset DEVPIN_DESTINATION_RUNNER" --slot runner
+}
+
+@test "slot refuses an unavailable simulator reached via main" {
+  put "$WORK/repo" config 'slot runner'
+  put "$WORK/repo" local "$SIM,id=$OLD_ID"
+  expect_unavailable "$WORK/repo/.devpin/local (no runner device of its own)" \
+    "devpin use <device> fixes both, devpin use --slot runner <device> runner alone" --slot runner
+}
+
+@test "accepts a known simulator quietly" {
+  put "$WORK/repo" local "$A"
+  expect_value "$A"
+}
+
+@test "accepts a phone only devicectl knows" {
+  local R="$DEV,id=$DEV_ID"
+  put "$WORK/repo" local "$R"
+  expect_value "$R"
+}
+
+@test "an id is found wherever it stands in the value" {
+  put "$WORK/repo" local "$SIM,id=$TWIN_ID_1,OS=27.0"
+  expect_value "$SIM,id=$TWIN_ID_1,OS=27.0"
+}
+
+@test "without devicectl warns and prints the value" {
+  export STUB_DEVICECTL=
+  put "$WORK/repo" local "$SIM,id=$GONE_ID"
+  run --separate-stderr devpin get
+  [ "$status" -eq 0 ]
+  [ "$output" = "$SIM,id=$GONE_ID" ]
+  assert_contains "$stderr" "devpin: warning: id $GONE_ID was not found, but xcrun devicectl could not be read — the id was not checked"
+}
+
+@test "without devicectl a known simulator passes quietly" {
+  export STUB_DEVICECTL=
+  put "$WORK/repo" local "$A"
+  expect_value "$A"
+}
+
+@test "without simctl warns and prints the value" {
+  export STUB_SIMCTL="$WORK/none"
+  put "$WORK/repo" local "$C"
+  run --separate-stderr devpin get
+  [ "$status" -eq 0 ]
+  [ "$output" = "$C" ]
+  assert_contains "$stderr" "warning"
+  assert_contains "$stderr" "$TWIN_ID_2"
+  assert_contains "$stderr" "xcrun simctl could not be read"
+  refute_contains "$stderr" "devicectl"
+}
+
+@test "without simctl a simulator devicectl lists passes" {
+  export STUB_SIMCTL="$WORK/none"
+  put "$WORK/repo" local "$A"
+  expect_value "$A"
+}
+
+@test "with neither list both are named" {
+  export STUB_SIMCTL="$WORK/none" STUB_DEVICECTL=
+  put "$WORK/repo" local "$SIM,id=$GONE_ID"
+  run --separate-stderr devpin get
+  [ "$status" -eq 0 ]
+  [ "$output" = "$SIM,id=$GONE_ID" ]
+  assert_contains "$stderr" "xcrun simctl and xcrun devicectl could not be read"
+}
+
+@test "does not match an id by prefix" {
+  put "$WORK/repo" local "$SIM,id=$GONE_ID"
+  expect_refused
+  assert_contains "$stderr" "no simulator or paired device with id $GONE_ID"
+  refute_contains "$stderr" "Test Phone"
+}
+
+@test "a value without id= calls no xcrun" {
+  export XCRUN_RECORD="$WORK/rec"
+  put "$WORK/repo" config 'slot runner'
+  put "$WORK/repo" default "$DEFAULT_DEST"
+  expect_value "$DEFAULT_DEST"
+  expect_slot_value "$DEFAULT_DEST"
+  [ "$(xcrun_calls simctl)" -eq 0 ]
+  [ "$(xcrun_calls devicectl)" -eq 0 ]
+}
+
+@test "asks devicectl only when simctl does not know the id" {
+  export XCRUN_RECORD="$WORK/rec"
+  put "$WORK/repo" local "$A"
+  expect_value "$A"
+  [ "$(xcrun_calls simctl)" -eq 1 ]
+  [ "$(xcrun_calls devicectl)" -eq 0 ]
+  : > "$WORK/rec"
+  put "$WORK/repo" local "$DEV,id=$DEV_ID"
+  expect_value "$DEV,id=$DEV_ID"
+  [ "$(xcrun_calls simctl)" -eq 1 ]
+  [ "$(xcrun_calls devicectl)" -eq 1 ]
+}
+
+@test "a refused id reads each list once" {
+  export XCRUN_RECORD="$WORK/rec"
+  put "$WORK/repo" local "$SIM,id=$GONE_ID"
+  expect_refused
+  [ "$(xcrun_calls simctl)" -eq 1 ]
+  [ "$(xcrun_calls devicectl)" -eq 1 ]
+}

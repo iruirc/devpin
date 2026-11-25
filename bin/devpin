@@ -48,7 +48,7 @@ find_root() {
       ROOT=$dir
       return 0
     fi
-    [[ $dir == $top || $dir == / ]] && break
+    [[ $dir == "$top" || $dir == / ]] && break
     dir=${dir:h}
   done
   die "no .devpin/ in $start or above it, up to $top — run devpin init"
@@ -282,7 +282,7 @@ collect_packages() {
     fi
     for dir in "${matches[@]}"; do
       dir=${dir:A}
-      [[ $dir == $ROOT ]] && continue
+      [[ $dir == "$ROOT" ]] && continue
       (( ${+seen[$dir]} )) && continue
       seen[$dir]=1
       if [[ -f $dir/Package.swift ]]; then
@@ -297,18 +297,110 @@ collect_packages() {
 # repo_label <dir>: prints the basename for ROOT, the path relative to ROOT for anything else.
 repo_label() {
   local dir=$1
-  if [[ $dir == $ROOT ]]; then
+  if [[ $dir == "$ROOT" ]]; then
     print -r -- ${ROOT:t}
     return 0
   fi
   local -a a b rel
   a=( ${(s:/:)ROOT} ); b=( ${(s:/:)dir} )
   local i=1
-  while (( i <= $#a && i <= $#b )) && [[ $a[i] == $b[i] ]]; do (( i++ )); done
+  while (( i <= $#a && i <= $#b )) && [[ "${a[i]}" == "${b[i]}" ]]; do (( i++ )); done
   local up=$(( $#a - i + 1 ))
   while (( up-- > 0 )); do rel+=( .. ); done
   rel+=( "${(@)b[i,-1]}" )
   print -r -- ${(j:/:)rel}
+}
+
+# ---------------------------------------------------------------- device lists
+
+SIMCTL_LIST=""
+SIMCTL_STATE=""       # "" (not read yet) | loaded | unavailable
+DEVICECTL_LIST=""
+DEVICECTL_STATE=""
+FOUND_NAME=""
+FOUND_UNAVAILABLE=""  # "unavailable, <reason>" (or just "unavailable"), empty when usable
+
+# destination_id <value>: prints the id= part of a destination (split on commas); returns 1 when
+# there is none.
+destination_id() {
+  local part
+  for part in "${(@s:,:)1}"; do
+    if [[ $part == id=?* ]]; then
+      print -r -- "${part#id=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# load_simulators / load_devices: read a list once per process into *_LIST and *_STATE. Call them
+# directly, never inside $( ... ): a subshell would lose what they loaded.
+load_simulators() {
+  [[ -z $SIMCTL_STATE ]] || return 0
+  if SIMCTL_LIST=$(xcrun simctl list devices 2>/dev/null); then
+    SIMCTL_STATE=loaded
+  else
+    SIMCTL_LIST=""; SIMCTL_STATE=unavailable
+  fi
+  return 0
+}
+
+load_devices() {
+  [[ -z $DEVICECTL_STATE ]] || return 0
+  if DEVICECTL_LIST=$(xcrun devicectl list devices --hide-headers --hide-default-columns --columns name --columns identifier --columns Reality --columns Platform 2>/dev/null); then
+    DEVICECTL_STATE=loaded
+  else
+    DEVICECTL_LIST=""; DEVICECTL_STATE=unavailable
+  fi
+  return 0
+}
+
+# find_device <id>: succeeds when a simulator or a paired device answers to the id, setting
+# FOUND_NAME and FOUND_UNAVAILABLE. devicectl is read only when simctl does not know the id.
+find_device() {
+  local id=$1 line rest mark
+  FOUND_NAME=""; FOUND_UNAVAILABLE=""
+
+  load_simulators
+  if [[ $SIMCTL_STATE == loaded ]]; then
+    for line in "${(@f)SIMCTL_LIST}"; do
+      line=${line%%[[:space:]]#}
+      [[ $line == *" ($id)"* ]] || continue
+      FOUND_NAME=${line%%" ($id)"*}
+      FOUND_NAME=${FOUND_NAME##[[:space:]]#}
+      rest=${line#*" ($id)"}
+      if [[ $rest == *"(unavailable"* ]]; then
+        mark=${rest#*"(unavailable"}
+        mark="unavailable$mark"
+        FOUND_UNAVAILABLE=${mark%)}
+      fi
+      return 0
+    done
+  fi
+
+  load_devices
+  if [[ $DEVICECTL_STATE == loaded ]]; then
+    for line in "${(@f)DEVICECTL_LIST}"; do
+      line="$line "
+      [[ $line == *" $id "* ]] || continue
+      FOUND_NAME=${line%%" $id "*}
+      FOUND_NAME=${FOUND_NAME%%[[:space:]]#}
+      return 0
+    done
+  fi
+  return 1
+}
+
+# unread_lists: prints which of the lists could not be read, for the warning; both loaders must
+# have run (find_device failing guarantees it, unless simctl answered).
+unread_lists() {
+  if [[ $SIMCTL_STATE == unavailable && $DEVICECTL_STATE == unavailable ]]; then
+    print -r -- "xcrun simctl and xcrun devicectl"
+  elif [[ $SIMCTL_STATE == unavailable ]]; then
+    print -r -- "xcrun simctl"
+  elif [[ $DEVICECTL_STATE == unavailable ]]; then
+    print -r -- "xcrun devicectl"
+  fi
 }
 
 # ---------------------------------------------------------------- commands
@@ -318,7 +410,7 @@ cmd_get() {
   while (( $# > 0 )); do
     case $1 in
       --slot)
-        (( $# >= 2 )) || usage
+        (( $# >= 2 )) && [[ -n $2 ]] || usage
         slot=$2
         shift 2
         ;;
@@ -335,6 +427,27 @@ cmd_get() {
       die "no destination for slot $slot of $ROOT: $(env_name "$slot") is unset, .devpin/$slot.local, .devpin/$slot.default, .devpin/local and .devpin/default hold no value — $FIX_HINT"
     fi
     die "no destination for $ROOT: DEVPIN_DESTINATION is unset and .devpin/local and .devpin/default hold no value — $FIX_HINT"
+  fi
+
+  local id reason hint
+  if ! id=$(destination_id "$RES_VALUE"); then
+    print -r -- "$RES_VALUE"
+    return 0
+  fi
+  fix_hint "$slot"
+  hint="$RES_VALUE comes from $RES_PLACE; $FIX_HINT (devpin list shows the devices)"
+  if find_device "$id"; then
+    if [[ -n $FOUND_UNAVAILABLE ]]; then
+      reason=${FOUND_UNAVAILABLE#unavailable}
+      reason=${reason#,}
+      reason=${reason##[[:space:]]#}
+      [[ -n $reason ]] || reason="no reason given"
+      die "simulator $FOUND_NAME with id $id is unavailable ($reason) — $hint"
+    fi
+  elif [[ -n $(unread_lists) ]]; then
+    warn "id $id was not found, but $(unread_lists) could not be read — the id was not checked"
+  else
+    die "no simulator or paired device with id $id on this machine — $hint"
   fi
   print -r -- "$RES_VALUE"
 }
