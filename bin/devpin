@@ -403,6 +403,121 @@ unread_lists() {
   fi
 }
 
+# ---------------------------------------------------------------- choices
+
+SIM_ROWS=()          # "<id> <name>" per available iOS simulator, in simctl order
+DEV_ROWS=()          # "<id> <name>" per paired physical iOS phone
+CHOICES_STATE=""     # "" (not read yet) | loaded | failed
+USE_VALUE=""
+
+# load_choices: fills SIM_ROWS and DEV_ROWS. Returns 1 when `xcrun simctl list devices available`
+# fails; a devicectl that cannot be read only leaves DEV_ROWS empty (DEVICECTL_STATE says so). Call
+# it directly, never inside $( ... ).
+load_choices() {
+  [[ $CHOICES_STATE != loaded ]] || return 0
+  [[ $CHOICES_STATE != failed ]] || return 1
+  SIM_ROWS=(); DEV_ROWS=()
+
+  local listing line header="" id name
+  local sim_re='^[[:space:]]+(.*[^[:space:]]) \(([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\) \([^()]*\)[[:space:]]*$'
+  local dev_re='^(.*[^[:space:]])[[:space:]]{2,}([^[:space:]]+) \([^()]*\)[[:space:]]+physical[[:space:]]+iOS[[:space:]]*$'
+
+  if ! listing=$(xcrun simctl list devices available 2>/dev/null); then
+    CHOICES_STATE=failed
+    return 1
+  fi
+  for line in "${(@f)listing}"; do
+    if [[ $line == '-- '*' --' ]]; then
+      header=$line
+    elif [[ $header == '-- iOS '* && $line =~ $sim_re ]]; then
+      name=${match[1]}; id=${match[2]}
+      SIM_ROWS+=( "$id $name" )
+    fi
+  done
+
+  load_devices
+  if [[ $DEVICECTL_STATE == loaded ]]; then
+    for line in "${(@f)DEVICECTL_LIST}"; do
+      if [[ $line =~ $dev_re ]]; then
+        name=${match[1]}; id=${match[2]}
+        DEV_ROWS+=( "$id $name" )
+      fi
+    done
+  fi
+  CHOICES_STATE=loaded
+  return 0
+}
+
+# resolve_device <arg>: sets USE_VALUE to the destination <arg> stands for. Returns 0, 1 (refused,
+# the reason printed) or 2 (not a device at all: the caller calls usage).
+resolve_device() {
+  local arg=$1 part row
+  USE_VALUE=""
+  [[ -n $arg && $arg != booted && $arg != *$'\n'* ]] || return 2
+
+  if [[ $arg == *platform=* ]]; then
+    for part in "${(@s:,:)arg}"; do
+      if [[ $part == platform=?* ]]; then
+        USE_VALUE=$arg
+        return 0
+      fi
+    done
+    return 2
+  fi
+
+  if ! load_choices; then
+    print -u2 -r -- "devpin: xcrun simctl list devices failed — cannot look up '$arg'; pass a platform= string to write it as is"
+    return 1
+  fi
+
+  local -a found
+  for row in "${SIM_ROWS[@]}"; do
+    [[ ${(U)${row%% *}} == "${(U)arg}" ]] && { USE_VALUE="platform=iOS Simulator,id=${row%% *}"; return 0 }
+  done
+  for row in "${DEV_ROWS[@]}"; do
+    [[ ${row%% *} == "$arg" ]] && { USE_VALUE="platform=iOS,id=${row%% *}"; return 0 }
+  done
+
+  for row in "${SIM_ROWS[@]}"; do
+    [[ ${row#* } == "$arg" ]] && found+=( "platform=iOS Simulator,id=${row%% *}" )
+  done
+  for row in "${DEV_ROWS[@]}"; do
+    [[ ${row#* } == "$arg" ]] && found+=( "platform=iOS,id=${row%% *}" )
+  done
+
+  if (( $#found == 1 )); then
+    USE_VALUE=${found[1]}
+    return 0
+  elif (( $#found > 1 )); then
+    print -u2 -r -- "devpin: '$arg' names $#found devices — pass one of them:"
+    for part in "${found[@]}"; do print -u2 -r -- "  $part"; done
+    return 1
+  fi
+
+  print -u2 -r -- "devpin: no available simulator or paired phone '$arg' — see devpin list"
+  if [[ $DEVICECTL_STATE == unavailable ]]; then
+    print -u2 -r -- "devpin: xcrun devicectl unavailable — paired phones were not searched"
+  fi
+  return 1
+}
+
+# write_atomic <dir> <file> <value>: writes <dir>/<file> through a temporary file beside it, then
+# mv. Returns 0 written, 1 failed. An interrupt removes the temporary file.
+write_atomic() {
+  local dir=$1 file=$2 value=$3 tmp rc=1
+  tmp=$(mktemp "$dir/.$file.XXXXXX") || return 1
+  trap "rm -f -- ${(q)tmp}; exit 130" INT
+  trap "rm -f -- ${(q)tmp}; exit 143" TERM
+  trap "rm -f -- ${(q)tmp}" EXIT
+  if printf '%s\n' "$value" > "$tmp" && mv -f -- "$tmp" "$dir/$file"; then
+    rc=0
+  else
+    rm -f -- "$tmp"
+  fi
+  trap - INT TERM EXIT
+  return $rc
+}
+
 # ---------------------------------------------------------------- commands
 
 cmd_get() {
@@ -512,8 +627,42 @@ cmd_show() {
   done
   return 0
 }
-cmd_list()  { die "list: not implemented" }
-cmd_use()   { die "use: not implemented" }
+
+cmd_list() {
+  (( $# == 0 )) || usage
+  load_choices || die "xcrun simctl list devices failed — simulators cannot be listed"
+
+  local row
+  print -r -- "Simulators:"
+  (( $#SIM_ROWS )) || print -r -- "  (none)"
+  for row in "${SIM_ROWS[@]}"; do
+    printf '  %-36s %s\n' "${row#* }" "${row%% *}"
+  done
+
+  if [[ $DEVICECTL_STATE == unavailable ]]; then
+    warn "xcrun devicectl unavailable — paired phones are not listed"
+    return 0
+  fi
+  print -r -- "Devices:"
+  (( $#DEV_ROWS )) || print -r -- "  (none)"
+  for row in "${DEV_ROWS[@]}"; do
+    printf '  %-36s %s\n' "${row#* }" "${row%% *}"
+  done
+  return 0
+}
+
+# cmd_use is interim (Task 7 replaces it): the root's main slot only, no report.
+cmd_use() {
+  (( $# == 1 )) || usage
+  find_root
+  load_config "$ROOT"
+  local rc=0
+  resolve_device "$1" || rc=$?
+  (( rc != 2 )) || usage
+  (( rc == 0 )) || exit 1
+  write_atomic "$ROOT/.devpin" local "$USE_VALUE" || die "could not write $ROOT/.devpin/local"
+  return 0
+}
 cmd_init()  { die "init: not implemented" }
 cmd_check() { die "check: not implemented" }
 
