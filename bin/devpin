@@ -844,7 +844,124 @@ cmd_init() {
   fi
   return 0
 }
-cmd_check() { die "check: not implemented" }
+# ---------------------------------------------------------------- check
+
+# The two awk variables classify needs. The option and the platform key are spelled in parts so
+# that this script never reports itself.
+CHECK_OPT="-""destination"
+CHECK_PLAT="platform""="
+CHECK_PATTERN="$CHECK_OPT|$CHECK_PLAT|DEST|SIMULATOR"
+
+# classify: filters `grep -n -H` lines (path:line:text), keeping those that write a device into a
+# command. A destination naming only a platform (macOS) is allowed; a destination that is a
+# variable, a command substitution or a placeholder is not a hardcoded one.
+classify() {
+  awk -v opt="$CHECK_OPT" -v plat="$CHECK_PLAT" '
+BEGIN {
+  q = "[\"\047]?"
+  allowed    = opt "[[:space:]=]+" q plat "macOS"
+  literal    = opt "[[:space:]=]+" q "[A-Za-z]+="
+  device     = plat "[^\"\047$]*,[[:space:]]*(name|id)=[^$<\"\047[:space:],)]"
+  assignment = "(^|[^A-Za-z0-9_])(DESTINATION|DEST|SIMULATOR)[[:space:]]*[:?+]?=[[:space:]]*" q "[A-Za-z]"
+}
+{ text = $0; sub(/^[^:]*:[0-9]+:/, "", text); gsub(allowed, "", text)
+  if (text ~ literal || text ~ device || text ~ assignment) print }'
+}
+
+# check_files <repo>: prints, NUL-separated and relative to <repo>, the files of a repository that
+# check reads. Inside git: tracked and untracked-but-not-ignored files, without embedded
+# repositories (entries ending in /) and without .devpin/. Elsewhere: a walk of the tree that skips
+# .git, .build, DerivedData, *.xcodeproj and .devpin.
+check_files() {
+  local repo=$1 f
+  if git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$repo" ls-files -co --exclude-standard -z 2>/dev/null |
+      while IFS= read -r -d '' f; do
+        case $f in
+          */|.devpin/*) continue ;;
+        esac
+        [[ -f $repo/$f ]] || continue
+        printf '%s\0' "$f"
+      done
+  else
+    (
+      cd "$repo" 2>/dev/null || exit 0
+      find . \( -name .git -o -name .build -o -name DerivedData -o -name '*.xcodeproj' -o -name .devpin \) \
+        -prune -o -type f -print0 2>/dev/null
+    ) | while IFS= read -r -d '' f; do
+      printf '%s\0' "${f#./}"
+    done
+  fi
+  return 0
+}
+
+# check_candidates <repo>: prints, NUL-separated and relative to ROOT, the files of <repo> that
+# survive the check-ignore patterns and do not belong to a package nested in it.
+check_candidates() {
+  local repo=$1 prefix="" f rel pat skip dir
+  local -a nested
+  if [[ $repo != "$ROOT" ]]; then
+    prefix="$(repo_label "$repo")/"
+  else
+    for dir in "${PKG_DIRS[@]}"; do
+      [[ $dir == "$ROOT"/* ]] && nested+=( "${dir#$ROOT/}/" )
+    done
+  fi
+  check_files "$repo" | while IFS= read -r -d '' f; do
+    skip=0
+    for dir in "${nested[@]}"; do
+      [[ $f == "$dir"* ]] && { skip=1; break }
+    done
+    (( skip )) && continue
+    rel=$prefix$f
+    for pat in "${CFG_IGNORE[@]}"; do
+      if [[ $rel == ${~pat} ]]; then skip=1; break; fi
+    done
+    (( skip )) && continue
+    printf '%s\0' "$rel"
+  done
+  return 0
+}
+
+# check_repo <repo>: prints the findings of one repository as <path relative to ROOT>:<line>:<text>.
+check_repo() {
+  check_candidates "$1" |
+    LC_ALL=C xargs -0 grep -I -l --null -E -e "$CHECK_PATTERN" -- 2>/dev/null |
+    LC_ALL=C xargs -0 grep -I -n -H -E -e "$CHECK_PATTERN" -- 2>/dev/null |
+    classify
+  return 0
+}
+
+cmd_check() {
+  (( $# == 0 )) || usage
+  find_root
+  load_config "$ROOT"
+  collect_packages
+
+  local red="" green="" off=""
+  if [[ -t 1 ]]; then red=$'\e[31m'; green=$'\e[32m'; off=$'\e[0m'; fi
+
+  cd "$ROOT" || die "cannot enter $ROOT"
+  local repo out total=0 repos=$(( 1 + $#PKG_DIRS ))
+  local -a found
+  for repo in "$ROOT" "${PKG_DIRS[@]}"; do
+    out=$(check_repo "$repo")
+    [[ -n $out ]] || continue
+    found=( "${(@f)out}" )
+    (( total += $#found ))
+    print -r -- "${red}✗${off} $(repo_label "$repo")"
+    print -r -- "$out"
+  done
+
+  if (( total == 0 )); then
+    print -r -- "${green}✓${off} No hardcoded destination in $repos repositories."
+    return 0
+  fi
+  local red2="" off2=""
+  if [[ -t 2 ]]; then red2=$'\e[31m'; off2=$'\e[0m'; fi
+  print -u2 -r -- "${red2}devpin: $total hardcoded destinations — take the device from devpin get, or write it into .devpin/default${off2}"
+  return 1
+}
 
 # ---------------------------------------------------------------- dispatcher
 

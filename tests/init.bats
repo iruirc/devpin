@@ -56,13 +56,13 @@ version_xy() { devpin --version | cut -d. -f1,2; }
 @test "never overwrites" {
   mkdir .devpin
   printf '# custom text\nslot runner\n' > .devpin/config
-  printf 'platform=iOS,id=OLDVALUE\n' > .devpin/default
+  printf '%s,id=OLDVALUE\n' "$DEV" > .devpin/default
   run --separate-stderr devpin init --default "Dev Phone"
   [ "$status" -eq 0 ]
   assert_contains "$output" "kept .devpin/default"
   refute_contains "$output" "created"
   [ "$(cat .devpin/config)" = "$(printf '# custom text\nslot runner')" ]
-  [ "$(cat .devpin/default)" = "platform=iOS,id=OLDVALUE" ]
+  [ "$(cat .devpin/default)" = "$DEV,id=OLDVALUE" ]
 }
 
 @test "does not duplicate the gitignore line" {
