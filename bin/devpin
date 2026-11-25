@@ -165,6 +165,7 @@ CFG_SLOTS=()
 CFG_PACKAGES=()
 CFG_IGNORE=()
 CFG_REQUIRES=""
+SLOT_RE='^[a-z0-9][a-z0-9-]*$'   # a slot name: a-z, 0-9 and -, never starting with -
 
 # version_ge <a> <b>: succeeds when version a >= version b, compared part by part as numbers;
 # a missing part counts as 0.
@@ -211,10 +212,10 @@ load_config() {
         fi
         ;;
       slot)
-        if [[ $arg =~ '^[a-z0-9-]+$' ]]; then
+        if [[ $arg =~ $SLOT_RE ]]; then
           CFG_SLOTS+=( "$arg" )
         else
-          [[ -n $parse_err ]] || parse_err="$n: slot takes one name of a-z, 0-9 and -, not '$arg'"
+          [[ -n $parse_err ]] || parse_err="$n: slot takes one name of a-z, 0-9 and -, not starting with -, not '$arg'"
         fi
         ;;
       packages|check-ignore)
@@ -247,7 +248,7 @@ known_slots() {
   all=( "${CFG_SLOTS[@]}" )
   for f in "$repo"/.devpin/*.(local|default)(N); do
     name=${${f:t}%.*}
-    [[ $name =~ '^[a-z0-9-]+$' ]] && all+=( "$name" )
+    [[ $name =~ $SLOT_RE ]] && all+=( "$name" )
   done
   KNOWN_SLOTS=( ${(ou)all} )
 }
@@ -255,12 +256,12 @@ known_slots() {
 # check_slot <repo> <slot>: a malformed name is a wrong invocation; an unknown one is refused.
 check_slot() {
   local repo=$1 slot=$2
-  [[ $slot =~ '^[a-z0-9-]+$' ]] || usage
+  [[ $slot =~ $SLOT_RE ]] || usage
   known_slots "$repo"
   (( ${KNOWN_SLOTS[(Ie)$slot]} )) && return 0
   local list=none
   (( $#KNOWN_SLOTS )) && list=${(j:, :)KNOWN_SLOTS}
-  die "unknown slot '$slot' — known: $list; declare it with 'slot $slot' in .devpin/config"
+  die "unknown slot '$slot' — known: $list; check the spelling, or declare it with 'slot $slot' in .devpin/config"
 }
 
 PKG_DIRS=()
@@ -453,7 +454,11 @@ load_choices() {
 resolve_device() {
   local arg=$1 part row
   USE_VALUE=""
-  [[ -n $arg && $arg != booted && $arg != *$'\n'* ]] || return 2
+  [[ -n $arg && $arg != *$'\n'* ]] || return 2
+  if [[ $arg == booted ]]; then
+    print -u2 -r -- "devpin: 'booted' is refused — with two simulators booted it would pick either; pass a name or UDID (see devpin list)"
+    return 1
+  fi
 
   if [[ $arg == *platform=* ]]; then
     for part in "${(@s:,:)arg}"; do
@@ -662,7 +667,7 @@ cmd_use() {
   while (( $# > 0 )); do
     case $1 in
       --slot)
-        (( $# >= 2 )) && [[ $2 =~ '^[a-z0-9-]+$' ]] || usage
+        (( $# >= 2 )) && [[ $2 =~ $SLOT_RE ]] || usage
         slot=$2
         shift 2
         ;;
@@ -709,6 +714,11 @@ cmd_use() {
   fi
 
   local repo outcome failed=0
+  if (( ! reset )); then
+    local var
+    var=$(env_name "$slot")
+    [[ -z ${(P)var:-} ]] || warn "$var is set and overrides .devpin/$file — unset it for the written value to apply"
+  fi
   for repo in "${repos[@]}"; do
     if (( reset )); then
       if [[ ! -e $repo/.devpin/$file ]]; then

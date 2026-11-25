@@ -134,3 +134,11 @@ version_xy() { devpin --version | cut -d. -f1,2; }
   [ "$status" -eq 2 ]
   [ ! -e .devpin ]
 }
+
+@test "--default booted is refused before creating anything" {
+  run --separate-stderr devpin init --default booted
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: 'booted' is refused — with two simulators booted it would pick either; pass a name or UDID (see devpin list)"
+  [ ! -e .devpin ]
+  [ ! -s .gitignore ]
+}

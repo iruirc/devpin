@@ -97,7 +97,7 @@ expect_refused() {
 
 @test "not a device is a wrong invocation" {
   local arg
-  for arg in "" booted xplatform=iOS platform= $'Test Phone\nx'; do
+  for arg in "" xplatform=iOS platform= $'Test Phone\nx'; do
     run --separate-stderr devpin use "$arg"
     [ "$status" -eq 2 ]
     assert_contains "$stderr" "Usage:"
@@ -149,8 +149,6 @@ expect_refused() {
   run --separate-stderr devpin use --slot
   [ "$status" -eq 2 ]
   run --separate-stderr devpin use --reset Dev
-  [ "$status" -eq 2 ]
-  run --separate-stderr devpin use booted
   [ "$status" -eq 2 ]
 }
 
@@ -347,7 +345,7 @@ R_DEV() { printf '%s,id=%s' "$DEV" "$DEV_ID"; }
   cd "$app"
   run --separate-stderr devpin use --slot runer 'Dev Phone'
   [ "$status" -eq 1 ]
-  assert_contains "$stderr" "unknown slot 'runer'"
+  assert_contains "$stderr" "devpin: unknown slot 'runer' — known: runner; check the spelling, or declare it with 'slot runer' in .devpin/config"
   [ -z "$(find "$WORK/t" -name '*local' -path '*/.devpin/*')" ]
 }
 
@@ -356,7 +354,7 @@ R_DEV() { printf '%s,id=%s' "$DEV" "$DEV_ID"; }
   put "$app" config $'packages ../packages/*\nslot runner'
   git -C "$app" commit -qam slot
   cd "$app"
-  local -a inv=( "" "--reset Dev" "--slot runner --reset Dev" "Dev Phone" "--bogus Dev" "--slot" "--slot Bad_Slot Dev" )
+  local -a inv=( "" "--reset Dev" "--slot runner --reset Dev" "Dev Phone" "--bogus Dev" "--slot" "--slot Bad_Slot Dev" "--slot --only-root Dev" "--slot -x Dev" )
   local a
   for a in "${inv[@]}"; do
     # shellcheck disable=SC2086
@@ -365,4 +363,46 @@ R_DEV() { printf '%s,id=%s' "$DEV" "$DEV_ID"; }
     assert_contains "$stderr" "Usage:"
   done
   [ -z "$(find "$WORK/t" -name '*local' -path '*/.devpin/*')" ]
+}
+
+@test "booted is refused with its own message" {
+  local msg="devpin: 'booted' is refused — with two simulators booted it would pick either; pass a name or UDID (see devpin list)"
+  run --separate-stderr devpin use booted
+  expect_refused
+  assert_contains "$stderr" "$msg"
+  local app; app=$(tree "$WORK/t")
+  put "$app" config $'packages ../packages/*\nslot runner'
+  git -C "$app" commit -qam slot
+  cd "$app"
+  run --separate-stderr devpin use --slot runner booted
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "$msg"
+  [ -z "$(find "$WORK/t" -name '*local' -path '*/.devpin/*')" ]
+}
+
+@test "a slot name starting with a hyphen is a wrong invocation" {
+  run --separate-stderr devpin use --slot --only-root 'Dev Phone'
+  [ "$status" -eq 2 ]
+  assert_contains "$stderr" "Usage:"
+  [ ! -e .devpin/local ]
+}
+
+@test "warns when an environment variable overrides what was written" {
+  DEVPIN_DESTINATION="$SIM,name=Other" run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat .devpin/local)" = "$DEV,id=$DEV_ID" ]
+  assert_contains "$stderr" "devpin: warning: DEVPIN_DESTINATION is set and overrides .devpin/local — unset it for the written value to apply"
+  # the slot variable of the slot written, not another
+  put . config 'slot runner'
+  DEVPIN_DESTINATION_RUNNER="$SIM,name=Other" run --separate-stderr devpin use --slot runner 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat .devpin/runner.local)" = "$DEV,id=$DEV_ID" ]
+  assert_contains "$stderr" "devpin: warning: DEVPIN_DESTINATION_RUNNER is set and overrides .devpin/runner.local — unset it for the written value to apply"
+  DEVPIN_DESTINATION="$SIM,name=Other" run --separate-stderr devpin use --slot runner 'Dev Phone'
+  refute_contains "$stderr" "warning"
+  # an empty variable reads as absent; --reset removes, so it has nothing to warn about
+  DEVPIN_DESTINATION="" run --separate-stderr devpin use 'Dev Phone'
+  refute_contains "$stderr" "warning"
+  DEVPIN_DESTINATION="$SIM,name=Other" run --separate-stderr devpin use --reset
+  refute_contains "$stderr" "warning"
 }

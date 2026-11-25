@@ -55,6 +55,12 @@ expect_config_error() {
   assert_contains "$stderr" "Runner"
 }
 
+@test "slot rejects a name that starts with a hyphen" {
+  write_config $'slot -runner'
+  expect_config_error "1: "
+  assert_contains "$stderr" "-runner"
+}
+
 @test "slot rejects a missing or doubled name" {
   write_config $'slot'
   expect_config_error "1: "

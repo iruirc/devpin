@@ -191,15 +191,14 @@ expect_slot_value() {
   [ "$status" -eq 1 ]
   [ -z "$output" ]
   assert_contains "$stderr" "unknown slot 'runer'"
-  assert_contains "$stderr" "known: other, runner, ui;"
-  assert_contains "$stderr" "slot runer"
+  assert_contains "$stderr" "devpin: unknown slot 'runer' — known: other, runner, ui; check the spelling, or declare it with 'slot runer' in .devpin/config"
 }
 
 @test "an undeclared slot with none known says so" {
   put "$WORK/repo" default "$DEFAULT_DEST"
   run --separate-stderr devpin get --slot runner
   [ "$status" -eq 1 ]
-  assert_contains "$stderr" "known: none;"
+  assert_contains "$stderr" "devpin: unknown slot 'runner' — known: none; check the spelling, or declare it with 'slot runner' in .devpin/config"
 }
 
 @test "a malformed slot name is a wrong invocation" {
