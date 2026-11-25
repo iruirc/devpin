@@ -70,10 +70,24 @@ setup() { common_setup; }
 @test "works through a symlinked path" {
   make_repo "$WORK/repo"
   put "$WORK/repo" default "$DEFAULT_DEST"
+  mkdir -p "$WORK/repo/Sources/Feature"
   ln -s "$WORK/repo" "$WORK/link"
-  cd "$WORK/link"
+  cd "$WORK/link/Sources/Feature"
   run --separate-stderr devpin get
   [ "$status" -eq 0 ]
   [ "$output" = "$DEFAULT_DEST" ]
   [ -z "$stderr" ]
+}
+
+@test "a symlinked path does not walk above the top of the git repository" {
+  put "$WORK" default "$DEFAULT_DEST"
+  make_repo "$WORK/outer/app"
+  mkdir -p "$WORK/outer/app/Sources"
+  ln -s "$WORK/outer/app" "$WORK/link"
+  cd "$WORK/link/Sources"
+  run --separate-stderr devpin get
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  assert_contains "$stderr" "$WORK/outer/app/Sources"
+  assert_contains "$stderr" "devpin init"
 }
