@@ -122,17 +122,247 @@ expect_refused() {
   [ "$output" = "$DEV,id=$DEV_ID" ]
 }
 
+@test "use replaces an existing local" {
+  put . local "$SIM,name=Test Phone"
+  run --separate-stderr devpin use 'Dev Phone'
+  expect_written "$DEV,id=$DEV_ID"
+}
+
+@test "a written file gets the mode the umask allows" {
+  local mask mode
+  for mask in 022 077 002; do
+    rm -f .devpin/local
+    (umask "$mask"; devpin use 'Dev Phone')
+    case $mask in 022) mode=644 ;; 077) mode=600 ;; 002) mode=664 ;; esac
+    [ "$(stat -f %Lp .devpin/local)" = "$mode" ]
+  done
+}
+
+@test "a wrong invocation is exit 2 outside any .devpin" {
+  mkdir "$WORK/bare"
+  cd "$WORK/bare"
+  run --separate-stderr devpin use
+  [ "$status" -eq 2 ]
+  assert_contains "$stderr" "Usage:"
+  run --separate-stderr devpin use --bogus Dev
+  [ "$status" -eq 2 ]
+  run --separate-stderr devpin use --slot
+  [ "$status" -eq 2 ]
+  run --separate-stderr devpin use --reset Dev
+  [ "$status" -eq 2 ]
+  run --separate-stderr devpin use booted
+  [ "$status" -eq 2 ]
+}
+
+# every_repo <tree-app> <file> <expected>: the file holds the value in app, pkgA, pkgB.
+expect_everywhere() {
+  local app=$1 file=$2 want=$3 d
+  for d in "$app" "$app/../packages/pkgA" "$app/../packages/pkgB"; do
+    [ "$(cat "$d/.devpin/$file")" = "$want" ]
+  done
+}
+
+expect_clean_trees() {
+  local d
+  for d in "$@"; do
+    [ -z "$(git -C "$d" status --porcelain)" ]
+  done
+}
+
+# tree <root> [nested]: a tree whose app has its .devpin/config committed, so a clean status
+# proves devpin wrote only ignored files.
+tree() {
+  local app
+  if [ "${2:-}" = nested ]; then app=$(nested_tree "$1"); else app=$(sibling_tree "$1"); fi
+  git -C "$app" add -A
+  git -C "$app" commit -q -m config
+  printf '%s\n' "$app"
+}
+
+R_DEV() { printf '%s,id=%s' "$DEV" "$DEV_ID"; }
+
+@test "writes the root and every package" {
+  local app; app=$(tree "$WORK/t")
+  cd "$app"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  expect_everywhere "$app" local "$(R_DEV)"
+  [ ! -e "$WORK/t/packages/notAPackage/.devpin" ]
+  expect_clean_trees "$app" "$WORK/t/packages/pkgA" "$WORK/t/packages/pkgB" "$WORK/t/packages/notAPackage"
+  assert_contains "$output" ".devpin/local <- $(R_DEV) (Dev Phone):"
+  assert_matches "$output" '^  MyApp +written$'
+  assert_matches "$output" '^  \.\./packages/pkgA +written$'
+}
+
+@test "nested layout writes every package" {
+  local app; app=$(tree "$WORK/t" nested)
+  cd "$app"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat .devpin/local)" = "$(R_DEV)" ]
+  [ "$(cat packages/pkgA/.devpin/local)" = "$(R_DEV)" ]
+  [ "$(cat packages/pkgB/.devpin/local)" = "$(R_DEV)" ]
+  expect_clean_trees "$app" "$app/packages/pkgA" "$app/packages/pkgB"
+}
+
+@test "writes the packages when run from a subdirectory" {
+  local app; app=$(tree "$WORK/t")
+  mkdir -p "$app/Sources"
+  cd "$app/Sources"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  expect_everywhere "$app" local "$(R_DEV)"
+  [ ! -e "$WORK/t/packages/notAPackage/.devpin" ]
+  expect_clean_trees "$app" "$WORK/t/packages/pkgA" "$WORK/t/packages/pkgB"
+}
+
+@test "--only-root writes the root alone" {
+  local app; app=$(tree "$WORK/t")
+  cd "$app"
+  run --separate-stderr devpin use --only-root 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat .devpin/local)" = "$(R_DEV)" ]
+  [ ! -e "$WORK/t/packages/pkgA/.devpin/local" ]
+  [ ! -e "$WORK/t/packages/pkgB/.devpin/local" ]
+}
+
+@test "a package without .devpin gets one" {
+  local app; app=$(tree "$WORK/t")
+  rm -rf "$WORK/t/packages/pkgB/.devpin"
+  cd "$app"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$WORK/t/packages/pkgB/.devpin/local")" = "$(R_DEV)" ]
+}
+
+@test "reports a repository it cannot write" {
+  local app; app=$(tree "$WORK/t")
+  mkdir "$WORK/t/packages/pkgA/.devpin"
+  cd "$app"
+  chmod a-w "$WORK/t/packages/pkgA/.devpin"
+  run --separate-stderr devpin use 'Dev Phone'
+  chmod u+w "$WORK/t/packages/pkgA/.devpin"
+  [ "$status" -eq 1 ]
+  [ "$(cat .devpin/local)" = "$(R_DEV)" ]
+  [ "$(cat "$WORK/t/packages/pkgB/.devpin/local")" = "$(R_DEV)" ]
+  [ ! -e "$WORK/t/packages/pkgA/.devpin/local" ]
+  assert_matches "$output" '^  \.\./packages/pkgA +FAILED to write$'
+  assert_contains "$stderr" "devpin: 1 repositories not updated"
+  expect_clean_trees "$WORK/t/packages/pkgA"
+}
+
+@test "warns where git does not ignore the file" {
+  local app; app=$(tree "$WORK/t")
+  make_package "$WORK/t/packages/pkgLoose"
+  : > "$WORK/t/packages/pkgLoose/.gitignore"
+  git -C "$WORK/t/packages/pkgLoose" commit -qam loose
+  cd "$app"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c WARNING)" -eq 1 ]
+  assert_matches "$output" '^  \.\./packages/pkgLoose +written, WARNING: git does not ignore \.devpin/local here — add \.devpin/\*local to \.gitignore$'
+}
+
+@test "use again keeps every tree clean" {
+  local app; app=$(tree "$WORK/t")
+  cd "$app"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  expect_everywhere "$app" local "$(R_DEV)"
+  expect_clean_trees "$app" "$WORK/t/packages/pkgA" "$WORK/t/packages/pkgB"
+  [ -z "$(find "$WORK/t" -name '.local.*' -o -name '.*.local.*')" ]
+}
+
 @test "an interrupted write leaves no temporary file" {
-  mkdir "$WORK/slowbin"
-  printf '#!/bin/sh\nsleep 2\nexec /bin/mv "$@"\n' > "$WORK/slowbin/mv"
-  chmod +x "$WORK/slowbin/mv"
-  PATH="$WORK/slowbin:$PATH" devpin use 'Dev Phone' 2>/dev/null &
-  local pid=$! n=0
-  while [ -z "$(ls -A .devpin | grep '^\.local\.')" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
-  [ -n "$(ls -A .devpin | grep '^\.local\.')" ]
-  kill -TERM "$pid"
-  local rc=0
-  wait "$pid" || rc=$?
-  [ "$rc" -eq 143 ]
-  [ -z "$(ls -A .devpin | grep '^\.local')" ]
+  local app; app=$(tree "$WORK/t")
+  mkdir "$WORK/killbin"
+  printf '#!/bin/bash\nkill -TERM "$PPID"\nexit 1\n' > "$WORK/killbin/mv"
+  chmod +x "$WORK/killbin/mv"
+  cd "$app"
+  PATH="$WORK/killbin:$PATH" run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -ne 0 ]
+  [ -z "$(find "$WORK/t" -path '*/.devpin/*' -name '*.local.*' -o -path '*/.devpin/*' -name '.local.*')" ]
+  [ ! -e .devpin/local ]
+  [ ! -e "$WORK/t/packages/pkgA/.devpin/local" ]
+  expect_clean_trees "$app" "$WORK/t/packages/pkgA" "$WORK/t/packages/pkgB"
+}
+
+@test "slot and reset" {
+  local app; app=$(tree "$WORK/t")
+  put "$app" config $'packages ../packages/*\nslot runner'
+  git -C "$app" commit -qam slot
+  cd "$app"
+  local A="$SIM,id=$SIM_ID"
+  run --separate-stderr devpin use 'Test Phone (dup)'
+  [ "$status" -eq 0 ]
+  run --separate-stderr devpin use --slot runner 'Dev Phone'
+  [ "$status" -eq 0 ]
+  assert_contains "$output" ".devpin/runner.local <- $(R_DEV) (Dev Phone):"
+  expect_everywhere "$app" runner.local "$(R_DEV)"
+  expect_everywhere "$app" local "$A"
+  run --separate-stderr devpin get --slot runner
+  [ "$output" = "$(R_DEV)" ]
+
+  run --separate-stderr devpin use --slot runner 'Twin Phone'
+  [ "$status" -eq 1 ]
+  expect_everywhere "$app" runner.local "$(R_DEV)"
+
+  run --separate-stderr devpin use --slot runner --reset
+  [ "$status" -eq 0 ]
+  assert_contains "$output" ".devpin/runner.local removed:"
+  assert_matches "$output" '^  MyApp +removed$'
+  [ ! -e .devpin/runner.local ]
+  [ ! -e "$WORK/t/packages/pkgA/.devpin/runner.local" ]
+  [ ! -e "$WORK/t/packages/pkgB/.devpin/runner.local" ]
+  expect_everywhere "$app" local "$A"
+  run --separate-stderr devpin get --slot runner
+  [ "$output" = "$A" ]
+
+  run --separate-stderr devpin use --slot runner --reset
+  [ "$status" -eq 0 ]
+  assert_matches "$output" '^  MyApp +absent$'
+  assert_matches "$output" '^  \.\./packages/pkgB +absent$'
+}
+
+@test "reset of the main slot" {
+  local app; app=$(tree "$WORK/t")
+  put "$app" default "$DEFAULT_DEST"
+  cd "$app"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  run --separate-stderr devpin use --reset
+  [ "$status" -eq 0 ]
+  [ ! -e .devpin/local ]
+  [ ! -e "$WORK/t/packages/pkgA/.devpin/local" ]
+  run --separate-stderr devpin get
+  [ "$output" = "$DEFAULT_DEST" ]
+}
+
+@test "an undeclared slot is refused" {
+  local app; app=$(tree "$WORK/t")
+  put "$app" config $'packages ../packages/*\nslot runner'
+  git -C "$app" commit -qam slot
+  cd "$app"
+  run --separate-stderr devpin use --slot runer 'Dev Phone'
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "unknown slot 'runer'"
+  [ -z "$(find "$WORK/t" -name '*local' -path '*/.devpin/*')" ]
+}
+
+@test "wrong invocation writes nothing" {
+  local app; app=$(tree "$WORK/t")
+  put "$app" config $'packages ../packages/*\nslot runner'
+  git -C "$app" commit -qam slot
+  cd "$app"
+  local -a inv=( "" "--reset Dev" "--slot runner --reset Dev" "Dev Phone" "--bogus Dev" "--slot" "--slot Bad_Slot Dev" )
+  local a
+  for a in "${inv[@]}"; do
+    # shellcheck disable=SC2086
+    run --separate-stderr devpin use $a
+    [ "$status" -eq 2 ]
+    assert_contains "$stderr" "Usage:"
+  done
+  [ -z "$(find "$WORK/t" -name '*local' -path '*/.devpin/*')" ]
 }
