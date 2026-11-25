@@ -737,7 +737,113 @@ cmd_use() {
   fi
   return 0
 }
-cmd_init()  { die "init: not implemented" }
+
+# init_repo <dir> <with_config> <default_value>: creates <dir>/.devpin and what is missing in it
+# (config only when with_config is 1, default only when a value is given), and the .gitignore line;
+# never overwrites. Prints the report row. Returns 1 when something could not be written.
+init_repo() {
+  local dir=$1 with_config=$2 value=$3 ignore_line='.devpin/*local'
+  local -a did
+  local failed=0 text
+
+  if ! mkdir -p -- "$dir/.devpin" 2>/dev/null; then
+    printf '  %-28s %s\n' "$(repo_label "$dir")" "FAILED to create .devpin/"
+    return 1
+  fi
+
+  if (( with_config )) && [[ ! -e $dir/.devpin/config ]]; then
+    text="# devpin — https://github.com/iruirc/devpin#config"$'\n'
+    text+="requires ${(j:.:)${(@s:.:)DEVPIN_VERSION}[1,2]}"$'\n'
+    text+="# slot runner"$'\n'
+    text+="# packages ../packages/*"$'\n'
+    text+="# check-ignore Docs/**"
+    if write_atomic "$dir/.devpin" config "$text"; then
+      did+=( "created .devpin/config" )
+    else
+      did+=( "FAILED to write .devpin/config" ); failed=1
+    fi
+  fi
+
+  if [[ -n $value ]]; then
+    if [[ -e $dir/.devpin/default ]]; then
+      did+=( "kept .devpin/default" )
+    elif write_atomic "$dir/.devpin" default "$value"; then
+      did+=( "created .devpin/default" )
+    else
+      did+=( "FAILED to write .devpin/default" ); failed=1
+    fi
+  fi
+
+  if [[ -e $dir/.gitignore ]] && grep -qxF -- "$ignore_line" "$dir/.gitignore"; then
+    :
+  else
+    local lead=""
+    [[ -s $dir/.gitignore && -n $(tail -c1 "$dir/.gitignore") ]] && lead=$'\n'
+    if printf '%s%s\n' "$lead" "$ignore_line" >> "$dir/.gitignore" 2>/dev/null; then
+      did+=( "added .devpin/*local to .gitignore" )
+    else
+      did+=( "FAILED to update .gitignore" ); failed=1
+    fi
+  fi
+
+  (( $#did )) || did=( "nothing to do" )
+  printf '  %-28s %s\n' "$(repo_label "$dir")" "${(j:, :)did}"
+  return $failed
+}
+
+# cmd_init [--default <device>]: creates .devpin/ in the root (the --root directory, else the top
+# of the enclosing git repository, else the working directory) and in every package its config
+# names. Arguments are validated, and the device resolved and refused, before anything is created.
+cmd_init() {
+  local device="" have_device=0
+  while (( $# > 0 )); do
+    case $1 in
+      --default)
+        (( $# >= 2 )) || usage
+        device=$2; have_device=1
+        shift 2
+        ;;
+      *) usage ;;
+    esac
+  done
+
+  local rc=0
+  if (( have_device )); then
+    resolve_device "$device" || rc=$?
+    (( rc != 2 )) || usage
+    (( rc == 0 )) || exit 1
+  fi
+
+  if [[ -n $ROOT_OPT ]]; then
+    [[ -d ${ROOT_OPT:A} ]] || die "${ROOT_OPT:A} (named by --root) is not a directory"
+    ROOT=${ROOT_OPT:A}
+  else
+    local top
+    if top=$(git rev-parse --show-toplevel 2>/dev/null) && [[ -n $top ]]; then
+      ROOT=${top:A}
+    else
+      ROOT=$PWD:A
+    fi
+  fi
+
+  # An existing config is read first, so that its packages are initialised too and a project
+  # needing a newer devpin is refused before anything is touched.
+  load_config "$ROOT"
+  collect_packages
+
+  local repo with_config failed=0
+  for repo in "$ROOT" "${PKG_DIRS[@]}"; do
+    with_config=0
+    [[ $repo == "$ROOT" ]] && with_config=1
+    init_repo "$repo" "$with_config" "$USE_VALUE" || (( failed++ ))
+  done
+
+  if (( failed )); then
+    print -u2 -r -- "devpin: $failed repositories not fully initialised"
+    return 1
+  fi
+  return 0
+}
 cmd_check() { die "check: not implemented" }
 
 # ---------------------------------------------------------------- dispatcher
