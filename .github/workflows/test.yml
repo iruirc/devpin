@@ -9,6 +9,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # tests/release.bats clones this checkout and pushes from the clone: a shallow one is refused
+          fetch-depth: 0
       - name: Install bats
         run: brew install bats-core
       - name: Run the suite
