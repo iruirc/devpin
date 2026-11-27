@@ -900,8 +900,9 @@ declared_slots() {
 # Not hardcoded: a destination naming only a platform (macOS) or generic/..., whether it follows
 # the option or is assigned; a key whose value is a variable or a placeholder ($..., <...>); a
 # device value that is Swift interpolation, a printf format or a template (\(..., %..., {...).
-# A slot is read from --slot X or --slot=X (quotes dropped) after the word devpin, and from
-# DEVPIN_DESTINATION_X (X lower-cased, _ read as -); a value starting with $ or < is a placeholder.
+# A slot is read from --slot X or --slot=X after the word devpin, X being the run of A-Za-z0-9_-
+# after an optional quote or backtick, and from DEVPIN_DESTINATION_X (X lower-cased, _ read as -);
+# a value starting with $ or < is a placeholder, an empty one no finding.
 classify() {
   awk -v opt="$CHECK_OPT" -v plat="$CHECK_PLAT" -v declared="$1" -v slots="$2" '
 function add_slot(name) {
@@ -933,9 +934,9 @@ BEGIN {
     rest = value
     if (before !~ word) continue
     if (!slots) { unchecked = 1; continue }
-    sub(/^["\047]/, "", value)
-    if (match(value, /["\047[:space:])]/)) value = substr(value, 1, RSTART - 1)
-    add_slot(value)
+    sub(/^["\047`]/, "", value)
+    if (value ~ /^[$<]/) continue
+    add_slot(match(value, /^[A-Za-z0-9_-]+/) ? substr(value, 1, RLENGTH) : "")
   }
   rest = line
   while (slots && match(rest, variable)) {
@@ -1042,7 +1043,7 @@ cmd_check() {
 
   cd "$ROOT" || die "cannot enter $ROOT"
   local repo out rec flags tok repos=$(( 1 + $#PKG_DIRS ))
-  local dests=0 slot_lines=0 unchecked=0
+  local dests=0 unchecked=0
   local -a lines names
   for repo in "$ROOT" "${PKG_DIRS[@]}"; do
     check_readable "$repo" || die "git cannot read $repo — fix the repository (git -C ${(q)repo} status shows why); an unreadable repository is not a clean one"
@@ -1054,12 +1055,9 @@ cmd_check() {
       [[ $flags == *" unchecked "* ]] && unchecked=1
       [[ $flags == *" dest "* || $flags == *" slot:"* ]] || continue
       [[ $flags == *" dest "* ]] && (( dests++ ))
-      if [[ $flags == *" slot:"* ]]; then
-        (( slot_lines++ ))
-        for tok in ${=flags}; do
-          [[ $tok == slot:* ]] && (( ! ${names[(Ie)${tok#slot:}]} )) && names+=( "${tok#slot:}" )
-        done
-      fi
+      for tok in ${=flags}; do
+        [[ $tok == slot:* ]] && (( ! ${names[(Ie)${tok#slot:}]} )) && names+=( "${tok#slot:}" )
+      done
       lines+=( "${rec#*$'\t'}" )
     done
     (( $#lines )) || continue
@@ -1069,21 +1067,21 @@ cmd_check() {
 
   local red2="" off2=""
   if [[ -t 2 ]]; then red2=$'\e[31m'; off2=$'\e[0m'; fi
-  if (( dests == 0 && slot_lines == 0 )); then
+  if (( dests == 0 && $#names == 0 )); then
     print -r -- "${green}✓${off} No hardcoded destination or undeclared slot in $repos repositories."
   fi
   if (( dests )); then
     print -u2 -r -- "${red2}devpin: $dests hardcoded destinations — take the device from devpin get, or write it into .devpin/default${off2}"
   fi
-  if (( slot_lines )); then
+  if (( $#names )); then
     local noun=slot
-    (( slot_lines > 1 )) && noun=slots
-    print -u2 -r -- "${red2}devpin: $slot_lines undeclared $noun (${(j:, :)names}) — declare it with 'slot ${names[1]}' in ${ROOT:t}/.devpin/config, or fix the spelling${off2}"
+    (( $#names > 1 )) && noun=slots
+    print -u2 -r -- "${red2}devpin: $#names undeclared $noun (${(j:, :)names}) — declare it with 'slot ${names[1]}' in ${ROOT:t}/.devpin/config, or fix the spelling${off2}"
   fi
   if (( unchecked )); then
     print -u2 -r -- "devpin: slots are not checked here — no .devpin/config; run devpin check from the project root"
   fi
-  (( dests || slot_lines )) && return 1
+  (( dests || $#names )) && return 1
   return 0
 }
 

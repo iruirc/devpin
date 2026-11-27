@@ -353,7 +353,7 @@ declare_runner() {
   [ "$status" -eq 1 ]
   assert_contains "$output" "Docs/Equals.md:3:devpin get --slot=runer"
   assert_contains "$output" 'Docs/Quoted.md:3:devpin get --slot "runer"'
-  assert_contains "$stderr" "devpin: 2 undeclared slots (runer) — declare it with 'slot runer'"
+  assert_contains "$stderr" "devpin: 1 undeclared slot (runer) — declare it with 'slot runer'"
 }
 
 @test "an undeclared slot variable is a finding" {
@@ -442,4 +442,25 @@ declare_runner() {
   run --separate-stderr devpin check
   [ "$status" -eq 0 ]
   [ "$stderr" = "devpin: slots are not checked here — no .devpin/config; run devpin check from the project root" ]
+}
+
+@test "a slot in Markdown inline code is read without the backtick" {
+  declare_runner
+  plant "$APP/Docs/Guide.md" 'Run `devpin get --slot runner` here'
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  plant "$APP/Docs/Other.md" 'Run `devpin get --slot runer` here'
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: 1 undeclared slot (runer) — declare it with 'slot runer'"
+}
+
+@test "a slot ends at a character no slot name holds" {
+  declare_runner
+  plant "$APP/run.sh" 'devpin get --slot runner;'
+  plant "$APP/more.sh" 'devpin get --slot \'
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
 }
