@@ -1,8 +1,9 @@
 bats_require_minimum_version 1.5.0
 load helpers/common
-# Every test releases from a clone of this repository: the working tree's bin/, scripts/,
-# CHANGELOG.md and README.md are copied into it and committed on main, so uncommitted code is what
-# runs. Its origin is a bare repository in the test's directory. The tap is a repository with its own
+# Every test releases from a clone of this repository: the working tree's bin/, scripts/ and
+# README.md are copied into it and committed on main, so uncommitted code is what runs. The clone's
+# CHANGELOG.md is tests/helpers/fixtures/CHANGELOG.md, never the real one: its Unreleased section
+# holds one entry, so the tests do not depend on where the repository is in its release cycle. Its origin is a bare repository in the test's directory. The tap is a repository with its own
 # bare remote, reached only through the brew stub, by name. Nothing here touches a real remote.
 
 setup() {
@@ -51,7 +52,8 @@ EOF
   git -C "$WORK/devpin" remote set-url origin "$WORK/origin.git"
   rm -rf "$WORK/devpin/bin" "$WORK/devpin/scripts"
   cp -R "$REPO/bin" "$REPO/scripts" "$WORK/devpin/"
-  cp "$REPO/CHANGELOG.md" "$REPO/README.md" "$WORK/devpin/"
+  cp "$REPO/README.md" "$WORK/devpin/"
+  cp "$REPO/tests/helpers/fixtures/CHANGELOG.md" "$WORK/devpin/CHANGELOG.md"
   # independent of the real history: no inherited tags, and a version below every release under test
   git -C "$WORK/devpin" tag -l | while read -r t; do git -C "$WORK/devpin" tag -d "$t" >/dev/null; done
   sed -i '' 's/^DEVPIN_VERSION=.*/DEVPIN_VERSION="0.0.0"/' "$WORK/devpin/bin/devpin"
