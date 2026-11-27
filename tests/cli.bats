@@ -72,3 +72,45 @@ setup() { common_setup; }
   [ "$(xcrun_calls simctl)" -eq 1 ]
   [ "$(xcrun_calls devicectl)" -eq 0 ]
 }
+
+@test "get, init and list take no --packages" {
+  local app
+  app=$(sibling_tree "$WORK")
+  cd "$app"
+  local c
+  for c in get init list; do
+    run --separate-stderr devpin "$c" --packages "$WORK/packages/*"
+    [ "$status" -eq 2 ]
+    assert_contains "$stderr" "Usage:"
+  done
+  [ ! -e "$WORK/packages/pkgA/.devpin" ]
+}
+
+@test "--packages needs an argument" {
+  local app
+  app=$(sibling_tree "$WORK")
+  cd "$app"
+  local c
+  for c in show check use; do
+    run --separate-stderr devpin "$c" --packages
+    [ "$status" -eq 2 ]
+    assert_contains "$stderr" "Usage:"
+    run --separate-stderr devpin "$c" --packages ""
+    [ "$status" -eq 2 ]
+  done
+  run --separate-stderr devpin use --packages 'Dev Phone'
+  [ "$status" -eq 2 ]
+  [ ! -e "$app/.devpin/local" ]
+}
+
+@test "init keeps the packages of config, whatever DEVPIN_PACKAGES says" {
+  local app
+  app=$(sibling_tree "$WORK")
+  make_package "$WORK/other/Core"
+  cd "$app"
+  DEVPIN_PACKAGES="$WORK/other/*" run --separate-stderr devpin init
+  [ "$status" -eq 0 ]
+  [ -d "$WORK/packages/pkgA/.devpin" ]
+  [ ! -e "$WORK/other/Core/.devpin" ]
+  refute_contains "$stderr" "packages:"
+}

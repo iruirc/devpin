@@ -464,3 +464,68 @@ declare_runner() {
   [ "$status" -eq 0 ]
   [ -z "$stderr" ]
 }
+
+@test "check --packages reads the given packages, not config's" {
+  make_package "$WORK/other/Core"
+  line="xcodebuild test $OPT '$SIM,name=iPhone 17'"
+  plant "$WORK/other/Core/Run.md" "$line"
+  plant "$WORK/packages/pkgA/Run.md" "$line"
+  run --separate-stderr devpin check --packages "$WORK/other/*"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "✗ ../other/Core"
+  assert_contains "$output" "../other/Core/Run.md:3:$line"
+  refute_contains "$output" "packages/pkgA"
+  assert_contains "$stderr" "devpin: packages: --packages"
+  assert_contains "$stderr" "devpin: 1 hardcoded destinations"
+  DEVPIN_PACKAGES="$WORK/other/*" run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  refute_contains "$output" "packages/pkgA"
+  assert_contains "$stderr" "devpin: packages: DEVPIN_PACKAGES"
+}
+
+@test "check reads a package whose path holds a space, from either source" {
+  make_package "$WORK/my pkgs/Core"
+  line="xcodebuild test $OPT '$SIM,name=iPhone 17'"
+  plant "$WORK/my pkgs/Core/Run.md" "$line"
+  run --separate-stderr devpin check --packages "$WORK/my pkgs/*"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "../my pkgs/Core/Run.md:3:$line"
+  DEVPIN_PACKAGES="$WORK/my pkgs/*" run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "../my pkgs/Core/Run.md:3:$line"
+}
+
+@test "with an overridden list check-ignore inside packages is not applied and says so" {
+  put "$APP" config $'packages ../packages/*\ncheck-ignore ../packages/pkgA/Docs/**\ncheck-ignore Docs/**'
+  line="xcodebuild $OPT '$SIM,name=iPhone 17'"
+  plant "$APP/Docs/x.md" "$line"
+  plant "$WORK/packages/pkgA/Docs/x.md" "$line"
+  run --separate-stderr devpin check --packages "$WORK/packages/pkgA"
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: check-ignore paths inside packages (../packages/pkgA/Docs/**) are not applied to packages from --packages"
+  assert_contains "$output" "../packages/pkgA/Docs/x.md:3:"
+  refute_contains "$output" "✗ MyApp"
+  DEVPIN_PACKAGES="$WORK/packages/pkgA" run --separate-stderr devpin check
+  assert_contains "$stderr" "are not applied to packages from DEVPIN_PACKAGES"
+  # the list from config: the patterns apply and nothing is said
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  refute_contains "$stderr" "check-ignore"
+}
+
+@test "a root-only check-ignore gives no line under an overridden list" {
+  put "$APP" config $'packages ../packages/*\ncheck-ignore Docs/**'
+  plant "$APP/Docs/x.md" "xcodebuild $OPT '$SIM,name=iPhone 17'"
+  run --separate-stderr devpin check --packages "$WORK/packages/pkgA"
+  [ "$status" -eq 0 ]
+  refute_contains "$stderr" "check-ignore"
+}
+
+@test "a check-ignore under the label of a nested package is named" {
+  nest=$(nested_tree "$WORK/n")
+  put "$nest" config $'packages packages/*\ncheck-ignore packages/pkgA/Docs/**\ncheck-ignore Docs/**'
+  cd "$nest"
+  run --separate-stderr devpin check --packages "$WORK/n/MyApp/packages/pkgB"
+  [ "$status" -eq 0 ]
+  assert_contains "$stderr" "devpin: check-ignore paths inside packages (packages/pkgA/Docs/**) are not applied to packages from --packages"
+}

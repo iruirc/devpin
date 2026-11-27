@@ -215,3 +215,167 @@ show_tree() {
   [ "$status" -eq 2 ]
   assert_contains "$stderr" "Usage:"
 }
+
+# other_tree: the sibling layout plus a second clone's package, other/Core, beside it; prints the
+# app path.
+other_tree() {
+  local app
+  app=$(sibling_tree "$WORK")
+  put "$app" default "$D"
+  put "$WORK/packages/pkgA" default "$D"
+  make_package "$WORK/other/Core"
+  put "$WORK/other/Core" default "$D"
+  printf '%s\n' "$app"
+}
+
+@test "--packages replaces the list and show names the source" {
+  app=$(other_tree)
+  cd "$app"
+  run --separate-stderr devpin show --packages "$WORK/other/*"
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  expected=$(lines \
+    "packages: --packages" \
+    "$(row MyApp main default "$D")" \
+    "$(row ../other/Core main default "$D")")
+  [ "$output" = "$expected" ]
+}
+
+@test "DEVPIN_PACKAGES does the same; the flag wins" {
+  app=$(other_tree)
+  cd "$app"
+  DEVPIN_PACKAGES="$WORK/other/*" run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  expected=$(lines \
+    "packages: DEVPIN_PACKAGES" \
+    "$(row MyApp main default "$D")" \
+    "$(row ../other/Core main default "$D")")
+  [ "$output" = "$expected" ]
+  DEVPIN_PACKAGES="$WORK/other/*" run --separate-stderr devpin show --packages "$WORK/packages/pkgA"
+  [ "$status" -eq 0 ]
+  expected=$(lines \
+    "packages: --packages" \
+    "$(row MyApp main default "$D")" \
+    "$(row ../packages/pkgA main default "$D")")
+  [ "$output" = "$expected" ]
+  local v
+  for v in "" ":" "::"; do
+    DEVPIN_PACKAGES="$v" run --separate-stderr devpin show
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
+    [ "${lines[0]}" = "$(row MyApp main default "$D")" ]
+    assert_contains "$output" "$(row ../packages/pkgA main default "$D")"
+    refute_contains "$output" "packages:"
+    refute_contains "$output" "other"
+  done
+}
+
+@test "DEVPIN_PACKAGES skips empty elements" {
+  app=$(other_tree)
+  cd "$app"
+  DEVPIN_PACKAGES=":$WORK/other/*::$WORK/packages/pkgA:" run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  expected=$(lines \
+    "packages: DEVPIN_PACKAGES" \
+    "$(row MyApp main default "$D")" \
+    "$(row ../other/Core main default "$D")" \
+    "$(row ../packages/pkgA main default "$D")")
+  [ "$output" = "$expected" ]
+}
+
+@test "two flags join and the variable is ignored" {
+  app=$(other_tree)
+  cd "$app"
+  DEVPIN_PACKAGES="$WORK/packages/pkgB" run --separate-stderr devpin show \
+    --packages "$WORK/other/*" --packages "$WORK/packages/pkgA"
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  expected=$(lines \
+    "packages: --packages" \
+    "$(row MyApp main default "$D")" \
+    "$(row ../other/Core main default "$D")" \
+    "$(row ../packages/pkgA main default "$D")")
+  [ "$output" = "$expected" ]
+}
+
+@test "a relative --packages is taken from the working directory" {
+  app=$(other_tree)
+  cd "$WORK"
+  run --separate-stderr devpin --root MyApp show --packages 'other/*'
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  expected=$(lines \
+    "packages: --packages" \
+    "$(row MyApp main default "$D")" \
+    "$(row ../other/Core main default "$D")")
+  [ "$output" = "$expected" ]
+  cd "$app"
+  DEVPIN_PACKAGES='../other/*' run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "$(row ../other/Core main default "$D")"
+}
+
+@test "a list from config prints no header" {
+  app=$(other_tree)
+  cd "$app"
+  run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  [ "${lines[0]}" = "$(row MyApp main default "$D")" ]
+  refute_contains "$output" "packages:"
+}
+
+@test "the root matched by --packages is not a package" {
+  app=$(other_tree)
+  cd "$app"
+  run --separate-stderr devpin show --packages "$app" --packages "$WORK/MyApp/../MyApp"
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  expected=$(lines \
+    "packages: --packages" \
+    "$(row MyApp main default "$D")")
+  [ "$output" = "$expected" ]
+  DEVPIN_PACKAGES="$WORK/*" run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^MyApp ')" -eq 1 ]
+}
+
+@test "a package path with a space" {
+  app=$(other_tree)
+  make_package "$WORK/my pkgs/Core"
+  put "$WORK/my pkgs/Core" default "$D"
+  cd "$app"
+  expected=$(lines \
+    "$(row MyApp main default "$D")" \
+    "$(row "../my pkgs/Core" main default "$D")")
+  run --separate-stderr devpin show --packages "$WORK/my pkgs/*"
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  [ "$output" = "$(lines "packages: --packages" "$expected")" ]
+  DEVPIN_PACKAGES="$WORK/my pkgs/*" run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  [ "$output" = "$(lines "packages: DEVPIN_PACKAGES" "$expected")" ]
+}
+
+@test "an overriding glob matching nothing warns" {
+  app=$(other_tree)
+  cd "$app"
+  run --separate-stderr devpin show --packages '/nonexistent/*'
+  [ "$status" -eq 0 ]
+  [ "$stderr" = "devpin: warning: --packages /nonexistent/* matches nothing" ]
+  [ "$output" = "$(lines "packages: --packages" "$(row MyApp main default "$D")")" ]
+  DEVPIN_PACKAGES='nowhere/*' run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  [ "$stderr" = "devpin: warning: DEVPIN_PACKAGES nowhere/* matches nothing" ]
+}
+
+@test "an overriding match without Package.swift is skipped and named" {
+  app=$(other_tree)
+  cd "$app"
+  run --separate-stderr devpin show --packages "$WORK/packages/*"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "$(note ../packages/notAPackage '(no Package.swift — skipped)')"
+}

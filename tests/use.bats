@@ -422,3 +422,47 @@ R_DEV() { printf '%s,id=%s' "$DEV" "$DEV_ID"; }
   DEVPIN_DESTINATION="$SIM,name=Other" run --separate-stderr devpin use --reset
   refute_contains "$stderr" "warning"
 }
+
+@test "use --packages writes there and leaves config's packages alone" {
+  local app; app=$(tree "$WORK/t")
+  make_package "$WORK/t/other/Core"
+  make_package "$WORK/t/my pkgs/Core"
+  cd "$app"
+  run --separate-stderr devpin use --packages "$WORK/t/other/*" 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat .devpin/local)" = "$(R_DEV)" ]
+  [ "$(cat "$WORK/t/other/Core/.devpin/local")" = "$(R_DEV)" ]
+  [ ! -e "$WORK/t/packages/pkgA/.devpin/local" ]
+  [ ! -e "$WORK/t/packages/pkgB/.devpin/local" ]
+  assert_contains "$stderr" "devpin: packages: --packages"
+  assert_matches "$output" '^  \.\./other/Core +written'
+  DEVPIN_PACKAGES="$WORK/t/my pkgs/*" run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$WORK/t/my pkgs/Core/.devpin/local")" = "$(R_DEV)" ]
+  [ ! -e "$WORK/t/packages/pkgA/.devpin/local" ]
+  assert_contains "$stderr" "devpin: packages: DEVPIN_PACKAGES"
+  run --separate-stderr devpin use --packages "$WORK/t/my pkgs/*" --reset
+  [ "$status" -eq 0 ]
+  [ ! -e "$WORK/t/my pkgs/Core/.devpin/local" ]
+  [ -e "$WORK/t/other/Core/.devpin/local" ]
+}
+
+@test "use with the list from config says nothing of it" {
+  local app; app=$(tree "$WORK/t")
+  cd "$app"
+  run --separate-stderr devpin use 'Dev Phone'
+  [ "$status" -eq 0 ]
+  refute_contains "$stderr" "packages:"
+}
+
+@test "use --only-root with --packages is a wrong invocation" {
+  local app; app=$(tree "$WORK/t")
+  make_package "$WORK/t/other/Core"
+  cd "$app"
+  run --separate-stderr devpin use --only-root --packages "$WORK/t/other/*" 'Dev Phone'
+  [ "$status" -eq 2 ]
+  assert_contains "$stderr" "Usage:"
+  run --separate-stderr devpin use --packages "$WORK/t/other/*" --only-root --reset
+  [ "$status" -eq 2 ]
+  [ -z "$(find "$WORK/t" -name '*local' -path '*/.devpin/*')" ]
+}

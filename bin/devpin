@@ -13,12 +13,14 @@ usage_text() {
   cat <<'USAGE'
 Usage: devpin [--root <dir>] <command>
   get [--slot S]                          print the destination
-  show                                    every repository, slot, value and source
+  show [--packages <glob>]…               every repository, slot, value and source
   list                                    available simulators and paired phones
-  use [--slot S] [--only-root] <device>   write the choice into .devpin/*local
-  use [--slot S] [--only-root] --reset    remove it
+  use [--slot S] [--only-root | [--packages <glob>]…] <device>
+                                          write the choice into .devpin/*local
+  use [--slot S] [--only-root | [--packages <glob>]…] --reset
+                                          remove it
   init [--default <device>]               create .devpin/
-  check                                   find devices written into commands
+  check [--packages <glob>]…              find devices written into commands
   --version
 USAGE
 }
@@ -269,21 +271,47 @@ check_slot() {
   die "unknown slot '$slot' — known: $list; check the spelling, or declare it with 'slot $slot' in .devpin/config"
 }
 
+START_DIR=""     # the directory devpin was started in, physical; set first thing in main
+PKG_FLAGS=()     # the arguments of every --packages, in order
 PKG_DIRS=()
 PKG_SKIPPED=()
+PKG_SOURCE=""    # --packages | DEVPIN_PACKAGES | config
 
-# collect_packages: sets PKG_DIRS (physical dirs holding Package.swift, in config order then glob
-# order, unique, never ROOT) and PKG_SKIPPED (matched dirs without one). Patterns are relative to
-# ROOT; a pattern matching nothing warns.
+# collect_packages [config]: sets PKG_SOURCE and PKG_DIRS (physical dirs holding Package.swift, in
+# list order then glob order, unique, never ROOT) and PKG_SKIPPED (matched dirs without one). The
+# list is PKG_FLAGS when there are any, else the non-empty :-separated elements of DEVPIN_PACKAGES
+# when there are any, else the packages lines of config; with the argument config, config's alone.
+# Globs of config are relative to ROOT, overriding ones to START_DIR unless absolute; a glob matching
+# nothing warns, naming its source.
 collect_packages() {
   PKG_DIRS=(); PKG_SKIPPED=()
   local pat dir
-  local -a matches
+  local -a pats matches
   local -A seen
-  for pat in "${CFG_PACKAGES[@]}"; do
-    matches=( ${ROOT}/${~pat}(N/) )
+  pats=( ${(s.:.)${DEVPIN_PACKAGES:-}} )
+  if [[ ${1:-} == config ]]; then
+    PKG_SOURCE=config; pats=( "${CFG_PACKAGES[@]}" )
+  elif (( $#PKG_FLAGS )); then
+    PKG_SOURCE=--packages; pats=( "${PKG_FLAGS[@]}" )
+  elif (( $#pats )); then
+    PKG_SOURCE=DEVPIN_PACKAGES
+  else
+    PKG_SOURCE=config; pats=( "${CFG_PACKAGES[@]}" )
+  fi
+  for pat in "${pats[@]}"; do
+    if [[ $PKG_SOURCE == config ]]; then
+      matches=( ${ROOT}/${~pat}(N/) )
+    elif [[ $pat == /* ]]; then
+      matches=( ${~pat}(N/) )
+    else
+      matches=( ${START_DIR}/${~pat}(N/) )
+    fi
     if (( $#matches == 0 )); then
-      warn "packages $pat matches nothing"
+      if [[ $PKG_SOURCE == config ]]; then
+        warn "packages $pat matches nothing"
+      else
+        warn "$PKG_SOURCE $pat matches nothing"
+      fi
       continue
     fi
     for dir in "${matches[@]}"; do
@@ -298,6 +326,17 @@ collect_packages() {
       fi
     done
   done
+}
+
+# announce_packages <fd>: names an overriding source of the list on <fd>: a header on stdout (1),
+# a devpin: line on stderr (2); nothing for the list of config.
+announce_packages() {
+  [[ $PKG_SOURCE != config ]] || return 0
+  if (( $1 == 1 )); then
+    print -r -- "packages: $PKG_SOURCE"
+  else
+    print -u2 -r -- "devpin: packages: $PKG_SOURCE"
+  fi
 }
 
 # repo_label <dir>: prints the basename for ROOT, the path relative to ROOT for anything else.
@@ -631,11 +670,23 @@ show_repo() {
   done
 }
 
+# take_packages <args>: when the first argument is --packages, appends its glob to PKG_FLAGS and
+# returns 0; a missing or empty glob is a wrong invocation. Returns 1 for any other argument.
+take_packages() {
+  [[ ${1:-} == --packages ]] || return 1
+  (( $# >= 2 )) && [[ -n $2 ]] || usage
+  PKG_FLAGS+=( "$2" )
+}
+
 cmd_show() {
-  (( $# == 0 )) || usage
+  while (( $# > 0 )); do
+    take_packages "$@" || usage
+    shift 2
+  done
   find_root
   load_config "$ROOT"
   collect_packages
+  announce_packages 1
 
   local dir
   show_repo "$ROOT"
@@ -689,6 +740,7 @@ cmd_use() {
         ;;
       --only-root) only_root=1; shift ;;
       --reset)     reset=1; shift ;;
+      --packages)  take_packages "$@"; shift 2 ;;
       --*)         usage ;;
       *)
         (( have_device )) && usage
@@ -702,6 +754,7 @@ cmd_use() {
   else
     (( have_device )) || usage
   fi
+  (( only_root && $#PKG_FLAGS )) && usage
 
   local rc=0
   if (( ! reset )); then
@@ -719,6 +772,7 @@ cmd_use() {
   local -a repos=( "$ROOT" )
   if (( ! only_root )); then
     collect_packages
+    announce_packages 2
     repos+=( "${PKG_DIRS[@]}" )
   fi
 
@@ -855,7 +909,7 @@ cmd_init() {
   # An existing config is read first, so that its packages are initialised too and a project
   # needing a newer devpin is refused before anything is touched.
   load_config "$ROOT"
-  collect_packages
+  collect_packages config
 
   local repo with_config failed=0
   for repo in "$ROOT" "${PKG_DIRS[@]}"; do
@@ -989,12 +1043,15 @@ check_files() {
 }
 
 # check_candidates <repo>: prints, NUL-separated and relative to ROOT, the files of <repo> that
-# survive the check-ignore patterns and do not belong to a package nested in it.
+# survive the check-ignore patterns and do not belong to a package nested in it. With an overridden
+# list the patterns apply to the root alone.
 check_candidates() {
   local repo=$1 prefix="" f rel pat skip dir
-  local -a nested
+  local -a nested ignore
+  ignore=( "${CFG_IGNORE[@]}" )
   if [[ $repo != "$ROOT" ]]; then
     prefix="$(repo_label "$repo")/"
+    [[ $PKG_SOURCE == config ]] || ignore=()
   else
     for dir in "${PKG_DIRS[@]}"; do
       [[ $dir == "$ROOT"/* ]] && nested+=( "${dir#$ROOT/}/" )
@@ -1007,7 +1064,7 @@ check_candidates() {
     done
     (( skip )) && continue
     rel=$prefix$f
-    for pat in "${CFG_IGNORE[@]}"; do
+    for pat in "${ignore[@]}"; do
       if [[ $rel == ${~pat} ]]; then skip=1; break; fi
     done
     (( skip )) && continue
@@ -1026,11 +1083,42 @@ check_repo() {
   return 0
 }
 
+# note_unapplied_ignores: with an overridden list, names on stderr the check-ignore patterns that
+# point into a package: those starting with ../ or with the label of a directory config's packages
+# lines match. Nothing when no pattern does.
+note_unapplied_ignores() {
+  [[ $PKG_SOURCE != config ]] || return 0
+  local pat dir label
+  local -a labels inside
+  for pat in "${CFG_PACKAGES[@]}"; do
+    for dir in ${ROOT}/${~pat}(N/); do
+      dir=${dir:A}
+      [[ $dir != "$ROOT" ]] && labels+=( "$(repo_label "$dir")/" )
+    done
+  done
+  for pat in "${CFG_IGNORE[@]}"; do
+    if [[ $pat == ../* ]]; then
+      inside+=( "$pat" )
+      continue
+    fi
+    for label in "${labels[@]}"; do
+      if [[ $pat == "$label"* ]]; then inside+=( "$pat" ); break; fi
+    done
+  done
+  (( $#inside )) || return 0
+  print -u2 -r -- "devpin: check-ignore paths inside packages (${(j:, :)inside}) are not applied to packages from $PKG_SOURCE"
+}
+
 cmd_check() {
-  (( $# == 0 )) || usage
+  while (( $# > 0 )); do
+    take_packages "$@" || usage
+    shift 2
+  done
   find_root
   load_config "$ROOT"
   collect_packages
+  announce_packages 2
+  note_unapplied_ignores
 
   local red="" green="" off=""
   if [[ -t 1 ]]; then red=$'\e[31m'; green=$'\e[32m'; off=$'\e[0m'; fi
@@ -1088,6 +1176,7 @@ cmd_check() {
 # ---------------------------------------------------------------- dispatcher
 
 main() {
+  START_DIR=$PWD:A
   while (( $# > 0 )); do
     case $1 in
       --root)
