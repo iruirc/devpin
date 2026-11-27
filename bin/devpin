@@ -876,14 +876,38 @@ cmd_init() {
 # that this script never reports itself.
 CHECK_OPT="-""destination"
 CHECK_PLAT="platform""="
-CHECK_PATTERN="$CHECK_OPT|$CHECK_PLAT|DEST|SIMULATOR"
+CHECK_PATTERN="$CHECK_OPT|$CHECK_PLAT|DEST|SIMULATOR|--slot|DEVPIN_DESTINATION_"
 
-# classify: filters `grep -n -H` lines (path:line:text), keeping those that write a device into a
-# command. Not hardcoded: a destination naming only a platform (macOS) or generic/..., whether it
-# follows the option or is assigned; a key whose value is a variable or a placeholder ($..., <...>);
-# a device value that is Swift interpolation, a printf format or a template (\(..., %..., {...).
+DECLARED_SLOTS=()
+
+# declared_slots: sets DECLARED_SLOTS, the slots the project root declares: the slot lines of the
+# loaded config plus every S.default in $ROOT/.devpin. S.local does not declare a slot.
+declared_slots() {
+  local f name
+  DECLARED_SLOTS=( "${CFG_SLOTS[@]}" )
+  for f in "$ROOT"/.devpin/*.default(N); do
+    name=${${f:t}%.default}
+    [[ $name =~ $SLOT_RE ]] && DECLARED_SLOTS+=( "$name" )
+  done
+  return 0
+}
+
+# classify <declared> <slots>: reads `grep -n -H` lines (path:line:text) and prints, for each line
+# that is a finding, one record FLAGS<TAB>path:line:text. FLAGS are space-separated tokens: `dest`
+# when the line writes a device into a command, `slot:<name>` per undeclared slot (in order, once
+# each). <declared> is the space-padded list of declared slots; with <slots> 0 the slot rule is
+# skipped and a line where --slot follows the word devpin gets the token `unchecked` instead.
+# Not hardcoded: a destination naming only a platform (macOS) or generic/..., whether it follows
+# the option or is assigned; a key whose value is a variable or a placeholder ($..., <...>); a
+# device value that is Swift interpolation, a printf format or a template (\(..., %..., {...).
+# A slot is read from --slot X or --slot=X (quotes dropped) after the word devpin, and from
+# DEVPIN_DESTINATION_X (X lower-cased, _ read as -); a value starting with $ or < is a placeholder.
 classify() {
-  awk -v opt="$CHECK_OPT" -v plat="$CHECK_PLAT" '
+  awk -v opt="$CHECK_OPT" -v plat="$CHECK_PLAT" -v declared="$1" -v slots="$2" '
+function add_slot(name) {
+  if (name == "" || name ~ /^[$<]/ || index(declared, " " name " ")) return
+  if (!index(" " flags " ", " slot:" name " ")) flags = flags (flags == "" ? "" : " ") "slot:" name
+}
 BEGIN {
   q = "[\"\047]?"
   head       = "(^|[^A-Za-z0-9_])(DESTINATION|DEST|SIMULATOR)[[:space:]]*[:?+]?=[[:space:]]*"
@@ -893,10 +917,35 @@ BEGIN {
   literal    = opt "[[:space:]=]+" q "[A-Za-z]+="
   device     = plat "[^\"\047$]*,[[:space:]]*(name|id)=[^$<\"\047[:space:],)\\\\%{]"
   assignment = head q "[A-Za-z]"
+  flag       = "--slot[[:space:]=]+"
+  word       = "(^|[^A-Za-z0-9_-])devpin([^A-Za-z0-9_-]|$)"
+  variable   = "DEVPIN_DESTINATION_[A-Z0-9_]+"
 }
-{ text = $0; sub(/^[^:]*:[0-9]+:/, "", text)
+{ text = $0; sub(/^[^:]*:[0-9]+:/, "", text); line = text
   gsub(allowed, "", text); gsub(allowed_as, "", text); gsub(allowed_kv, "", text)
-  if (text ~ literal || text ~ device || text ~ assignment) print }'
+  flags = (text ~ literal || text ~ device || text ~ assignment) ? "dest" : ""
+  unchecked = 0
+  before = ""; rest = line
+  while (match(rest, flag)) {
+    before = before substr(rest, 1, RSTART - 1)
+    value = substr(rest, RSTART + RLENGTH)
+    before = before substr(rest, RSTART, RLENGTH)
+    rest = value
+    if (before !~ word) continue
+    if (!slots) { unchecked = 1; continue }
+    sub(/^["\047]/, "", value)
+    if (match(value, /["\047[:space:])]/)) value = substr(value, 1, RSTART - 1)
+    add_slot(value)
+  }
+  rest = line
+  while (slots && match(rest, variable)) {
+    value = tolower(substr(rest, RSTART + 19, RLENGTH - 19))
+    gsub(/_/, "-", value)
+    add_slot(value)
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  if (unchecked) flags = flags (flags == "" ? "" : " ") "unchecked"
+  if (flags != "") print flags "\t" $0 }'
 }
 
 # check_readable <repo>: succeeds when check can list the files of <repo>; fails for a repository
@@ -966,12 +1015,13 @@ check_candidates() {
   return 0
 }
 
-# check_repo <repo>: prints the findings of one repository as <path relative to ROOT>:<line>:<text>.
+# check_repo <repo> <declared> <slots>: prints the records of one repository as classify does, the
+# path relative to ROOT; <declared> and <slots> are passed on to classify.
 check_repo() {
   check_candidates "$1" |
     LC_ALL=C xargs -0 grep -I -l --null -E -e "$CHECK_PATTERN" -- 2>/dev/null |
     LC_ALL=C xargs -0 grep -I -n -H -E -e "$CHECK_PATTERN" -- 2>/dev/null |
-    classify
+    classify "$2" "$3"
   return 0
 }
 
@@ -984,27 +1034,57 @@ cmd_check() {
   local red="" green="" off=""
   if [[ -t 1 ]]; then red=$'\e[31m'; green=$'\e[32m'; off=$'\e[0m'; fi
 
+  local declared=" "
+  if (( CFG_PRESENT )); then
+    declared_slots
+    declared=" ${(j: :)DECLARED_SLOTS} "
+  fi
+
   cd "$ROOT" || die "cannot enter $ROOT"
-  local repo out total=0 repos=$(( 1 + $#PKG_DIRS ))
-  local -a found
+  local repo out rec flags tok repos=$(( 1 + $#PKG_DIRS ))
+  local dests=0 slot_lines=0 unchecked=0
+  local -a lines names
   for repo in "$ROOT" "${PKG_DIRS[@]}"; do
     check_readable "$repo" || die "git cannot read $repo — fix the repository (git -C ${(q)repo} status shows why); an unreadable repository is not a clean one"
-    out=$(check_repo "$repo")
-    [[ -n $out ]] || continue
-    found=( "${(@f)out}" )
-    (( total += $#found ))
+    out=$(check_repo "$repo" "$declared" "$CFG_PRESENT")
+    lines=()
+    for rec in "${(@f)out}"; do
+      [[ -n $rec ]] || continue
+      flags=" ${rec%%$'\t'*} "
+      [[ $flags == *" unchecked "* ]] && unchecked=1
+      [[ $flags == *" dest "* || $flags == *" slot:"* ]] || continue
+      [[ $flags == *" dest "* ]] && (( dests++ ))
+      if [[ $flags == *" slot:"* ]]; then
+        (( slot_lines++ ))
+        for tok in ${=flags}; do
+          [[ $tok == slot:* ]] && (( ! ${names[(Ie)${tok#slot:}]} )) && names+=( "${tok#slot:}" )
+        done
+      fi
+      lines+=( "${rec#*$'\t'}" )
+    done
+    (( $#lines )) || continue
     print -r -- "${red}✗${off} $(repo_label "$repo")"
-    print -r -- "$out"
+    print -r -l -- "${lines[@]}"
   done
 
-  if (( total == 0 )); then
-    print -r -- "${green}✓${off} No hardcoded destination in $repos repositories."
-    return 0
-  fi
   local red2="" off2=""
   if [[ -t 2 ]]; then red2=$'\e[31m'; off2=$'\e[0m'; fi
-  print -u2 -r -- "${red2}devpin: $total hardcoded destinations — take the device from devpin get, or write it into .devpin/default${off2}"
-  return 1
+  if (( dests == 0 && slot_lines == 0 )); then
+    print -r -- "${green}✓${off} No hardcoded destination or undeclared slot in $repos repositories."
+  fi
+  if (( dests )); then
+    print -u2 -r -- "${red2}devpin: $dests hardcoded destinations — take the device from devpin get, or write it into .devpin/default${off2}"
+  fi
+  if (( slot_lines )); then
+    local noun=slot
+    (( slot_lines > 1 )) && noun=slots
+    print -u2 -r -- "${red2}devpin: $slot_lines undeclared $noun (${(j:, :)names}) — declare it with 'slot ${names[1]}' in ${ROOT:t}/.devpin/config, or fix the spelling${off2}"
+  fi
+  if (( unchecked )); then
+    print -u2 -r -- "devpin: slots are not checked here — no .devpin/config; run devpin check from the project root"
+  fi
+  (( dests || slot_lines )) && return 1
+  return 0
 }
 
 # ---------------------------------------------------------------- dispatcher

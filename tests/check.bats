@@ -307,3 +307,139 @@ pass_line() {
   [ "$status" -eq 1 ]
   assert_contains "$stderr" "devpin: git cannot read $WORK/packages/pkgA"
 }
+
+# ---- undeclared slots
+
+# declare_runner: the root's config declares slot runner.
+declare_runner() {
+  put "$APP" config $'packages ../packages/*\nslot runner'
+}
+
+@test "an undeclared slot in a package's Markdown is a finding" {
+  declare_runner
+  plant "$WORK/packages/pkgA/README.md" 'DEST="$(devpin get --slot runer)"'
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "✗ ../packages/pkgA"
+  assert_contains "$output" "README.md:3:"
+  assert_contains "$stderr" "devpin: 1 undeclared slot (runer) — declare it with 'slot runer' in MyApp/.devpin/config, or fix the spelling"
+  refute_contains "$stderr" "hardcoded"
+}
+
+@test "a declared slot is clean" {
+  declare_runner
+  plant "$APP/Docs/Guide.md" 'DEST="$(devpin get --slot runner)"'
+  plant "$APP/Docs/Other.md" 'DEST="$(devpin get --slot=runner)"'
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+}
+
+@test "a placeholder slot is clean" {
+  declare_runner
+  plant "$APP/Docs/Guide.md" 'devpin get --slot <slot>'
+  plant "$APP/Docs/Other.md" 'devpin get --slot $SLOT'
+  plant "$APP/Docs/Third.md" 'echo "${DEVPIN_DESTINATION_${name}}"'
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+}
+
+@test "--slot=X and a quoted X are findings too" {
+  declare_runner
+  plant "$APP/Docs/Equals.md" 'devpin get --slot=runer'
+  plant "$APP/Docs/Quoted.md" 'devpin get --slot "runer"'
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "Docs/Equals.md:3:devpin get --slot=runer"
+  assert_contains "$output" 'Docs/Quoted.md:3:devpin get --slot "runer"'
+  assert_contains "$stderr" "devpin: 2 undeclared slots (runer) — declare it with 'slot runer'"
+}
+
+@test "an undeclared slot variable is a finding" {
+  declare_runner
+  plant "$APP/ci.sh" 'DEVPIN_DESTINATION_RUNER=x make test'
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "ci.sh:3:DEVPIN_DESTINATION_RUNER=x make test"
+  assert_contains "$stderr" "devpin: 1 undeclared slot (runer)"
+  refute_contains "$stderr" "hardcoded"
+}
+
+@test "a declared slot variable read is clean" {
+  declare_runner
+  plant "$APP/ci.sh" 'echo "$DEVPIN_DESTINATION_RUNNER"'
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+}
+
+@test "the main variable is not a slot finding" {
+  declare_runner
+  plant "$APP/ci.sh" 'DEVPIN_DESTINATION=foo'
+  run --separate-stderr devpin check
+  refute_contains "$stderr" "undeclared slot"
+}
+
+@test "a slot default in the root declares it" {
+  put "$APP" default "$SIM,name=iPhone 17"
+  put "$APP" runner.default "$SIM,name=iPhone 17"
+  plant "$APP/Docs/Guide.md" 'devpin get --slot runner'
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+}
+
+@test "a slot local in the root does not" {
+  put "$APP" runner.local "$SIM,name=iPhone 17"
+  plant "$APP/Docs/Guide.md" 'devpin get --slot runner'
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: 1 undeclared slot (runner)"
+}
+
+@test "--slot of another tool is not a finding" {
+  declare_runner
+  plant "$APP/Docs/Guide.md" 'mytool --slot runer'
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+}
+
+@test "a line with both kinds prints once and counts in both" {
+  declare_runner
+  line="xcodebuild $OPT '$SIM,name=iPhone 17' # devpin get --slot runer"
+  plant "$APP/Docs/Guide.md" "$line"
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'Guide.md:3:')" -eq 1 ]
+  assert_contains "$output" "Docs/Guide.md:3:$line"
+  assert_contains "$stderr" "devpin: 1 hardcoded destinations"
+  assert_contains "$stderr" "devpin: 1 undeclared slot (runer)"
+}
+
+@test "two undeclared slots are named in one line" {
+  declare_runner
+  plant "$APP/Docs/Guide.md" 'devpin get --slot runer'
+  plant "$APP/Docs/Guide.md" 'devpin get --slot ui-test'
+  run --separate-stderr devpin check
+  [ "$status" -eq 1 ]
+  assert_contains "$stderr" "devpin: 2 undeclared slots (runer, ui-test) — declare it with 'slot runer'"
+  [ "$(printf '%s\n' "$stderr" | grep -c 'undeclared slot')" -eq 1 ]
+}
+
+@test "the clean line names both classes" {
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "No hardcoded destination or undeclared slot in 3 repositories."
+}
+
+@test "from a repository without config slots are not checked" {
+  make_repo "$WORK/solo"
+  put "$WORK/solo" default "$SIM,name=iPhone 17"
+  plant "$WORK/solo/README.md" 'devpin get --slot anything'
+  cd "$WORK/solo"
+  run --separate-stderr devpin check
+  [ "$status" -eq 0 ]
+  [ "$stderr" = "devpin: slots are not checked here — no .devpin/config; run devpin check from the project root" ]
+}
