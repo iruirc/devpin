@@ -12,7 +12,8 @@ xcodebuild test -scheme MyApp -destination "$(devpin get)"
 - **one clone, its own device** — a machine's choice lives in a git-ignored file, the project's default
   in a committed one;
 - **packages follow the app** — `devpin use "iPhone 17 Pro"` writes the choice into the app and every
-  package listed in its `config`, beside it (`../packages/*`) or inside it (`packages/*`);
+  package listed in its `config`, beside it (`../packages/*`) or inside it (`packages/*`), or in the
+  list given by `--packages`;
 - **named slots** — a second device, for an on-device test runner for example, falling back to the main
   one when not set;
 - **a hardcode check** — `devpin check` fails on a device written into a command anywhere else.
@@ -72,13 +73,49 @@ check-ignore Docs/**    paths check does not read, relative to the root
 - `requires` takes `major.minor` or `major.minor.patch`, compared part by part as numbers (a project
   requiring `1.10` refuses devpin 1.9.0); a missing part counts as 0. A project that needs a newer
   devpin is reported as that, whatever else its `config` holds.
-- A slot name is `a-z`, `0-9` and `-`, and does not start with `-`.
+- A slot name is `a-z`, `0-9` and `-`, and does not start with `-`; any other name is a wrong
+  invocation (exit 2) in every repository.
 - `packages` matches that hold no `Package.swift` are skipped, and `devpin show` names them. A pattern
-  that matches nothing warns. No `packages` line means the root alone.
+  that matches nothing warns. No `packages` line means the root alone. `--packages` and
+  `DEVPIN_PACKAGES` replace the list (see *Packages elsewhere*).
 - `check-ignore` paths are relative to the root of the app, even when they reach into a package:
   `../packages/Core/Docs/**` beside the app, `packages/Core/Docs/**` inside it.
 - A missing `.devpin/config` is an empty config: every command works without one. A package has no
   `config` of its own; it follows the app's.
+
+### Packages elsewhere
+
+The list of packages comes from the `packages` lines of `config`, unless one of these replaces it. The
+first present wins, and replaces the list whole, never adds to it:
+
+1. `--packages <glob>` on `show`, `use` and `check`; repeatable, like the `packages` line;
+2. `DEVPIN_PACKAGES`: globs separated by `:`, empty elements skipped; an empty variable counts as unset;
+3. the `packages` lines of `config`.
+
+```sh
+devpin show --packages "../clone/packages/*"               # a second clone of the packages
+DEVPIN_PACKAGES="$HOME/work/packages/*" devpin use "iPhone 17 Pro"
+```
+
+Given twice, `--packages` makes one list; with it set, `DEVPIN_PACKAGES` is ignored whole.
+
+- A relative glob of the flag or the variable is taken from the directory devpin was started in,
+  `--root` or not; an absolute one as it is. A `packages` line of `config` stays relative to the root.
+  `~` is not expanded inside `DEVPIN_PACKAGES` or a quoted `--packages` argument: write `$HOME` or an
+  absolute path.
+- The rest is as for `config`: a match without `Package.swift` is skipped and `show` names it, the root
+  itself is never a package, a directory matched twice counts once. A glob that matches nothing warns,
+  naming its source: `devpin: warning: --packages ../clone/* matches nothing`. A package outside the
+  root is labelled by its path relative to it (`../../tmp/other/Core`).
+- When the list is overridden, `show` prints `packages: --packages` (or `packages: DEVPIN_PACKAGES`)
+  before its table, and `use` and `check` print it on stderr, with the `devpin: ` prefix. A list from
+  `config` prints nothing.
+- `check-ignore` then applies to the files of the app alone, never to a package's. When `config` holds a
+  `check-ignore` path that reaches into a package (`../packages/Core/Docs/**`), `check` says it is not
+  applied to the packages from `--packages` (or `DEVPIN_PACKAGES`).
+- `--packages` without an argument is a wrong invocation (exit 2). `get`, `init` and `list` do not take
+  it, and nor does `use --only-root`: exit 2. `init` always uses the `packages` of `config`, and ignores
+  `DEVPIN_PACKAGES`.
 
 ## Which repository is read
 
@@ -99,10 +136,29 @@ For slot `S`, the first non-empty source wins:
 | 4 | none | the main slot, by rows 1 to 3 |
 
 An environment variable set to the empty string counts as unset. A slot with no device of its own is the
-main device, so a project with no second device never sees slots. A slot is valid when the app's
-`config` declares it, or when the repository read holds a file for it (a package has no `config`, but it
-got `runner.local` from `devpin use --slot runner`). Any other name, a typo such as `runer`, is an error
-listing the known slots, never a silent fallback.
+main device, so a project with no second device never sees slots.
+
+Which names are valid depends on the repository read. In one with a `.devpin/config`, a slot is valid
+when `config` declares it, or when `.devpin/` holds `S.local` or `S.default`. Any other name, a typo
+such as `runer`, is an error listing the known slots (exit 1), never a silent fallback. In one without
+a `config`, any valid name is accepted and resolved by the table above, down to the main slot. A
+package is such a repository, and so is a root that has no `config`.
+
+### Slots in packages
+
+Only the app, the root of the project, declares slots; a package needs no `config` for them. In a
+package, `devpin get --slot runner` prints the main device when nothing of its own is set, exit 0,
+which is the answer `devpin show` gives from the root for that package. Because nothing there can tell
+`runner` from a typo, `get` warns on stderr when the value fell back to the main slot and `.devpin/`
+holds no file for the slot:
+
+```
+devpin: slot 'runer' is not declared in this repository — using the main device; the project root declares its slots
+```
+
+A value from `DEVPIN_DESTINATION_<S>`, `S.local` or `S.default` gives no warning. A misspelt slot
+written into a command or a script is caught by `devpin check` from the app (see *The hardcode check*).
+`devpin use --slot runner` and `--reset` need no declaration in a package either.
 
 ## Commands
 
@@ -128,11 +184,12 @@ Ids are matched case-sensitively, as `simctl` lists them (upper case). `devpin u
 any case and writes it as listed, so a hand-written id in another case is the one to look at when `get`
 says an id is unknown.
 
-### `devpin show`
+### `devpin show [--packages <glob>]…`
 
-One row per repository and slot of the app and every package of its `config`: the source (`env`,
-`local`, `default`, `main` for a slot that falls back, `missing`) and the value with the device it names.
-UDIDs are shortened to `<UDID>` here.
+One row per repository and slot of the app and every package of its `config` (or of the list given by
+`--packages` or `DEVPIN_PACKAGES`, headed by a `packages:` line): the source (`env`, `local`,
+`default`, `main` for a slot that falls back, `missing`) and the value with the device it names. UDIDs
+are shortened to `<UDID>` here.
 
 ```
 $ devpin show
@@ -161,7 +218,7 @@ Devices:
 
 Without `devicectl`: the simulators alone and a warning. Exit 1 when `simctl` itself fails.
 
-### `devpin use [--slot S] [--only-root] <device>`
+### `devpin use [--slot S] [--only-root | [--packages <glob>]…] <device>`
 
 `<device>` is a device name, a UDID, or a string holding `platform=`. A name or UDID is written as
 `platform=…,id=<UDID>`; a `platform=` string is written as given.
@@ -174,8 +231,9 @@ $ devpin use "iPhone 17"
   ../packages/pkgB             written
 ```
 
-It writes `.devpin/local` (or `S.local`) in the app and in every package of `config`; `--only-root`
-writes the app alone. Each write is atomic: a temporary file beside the target, then `mv`.
+It writes `.devpin/local` (or `S.local`) in the app and in every package of `config`, or of the list
+given by `--packages` or `DEVPIN_PACKAGES`; `--only-root` writes the app alone. Each write is atomic: a
+temporary file beside the target, then `mv`.
 
 - A name two devices share, or one nobody has, is refused before anything is written, with the
   candidates listed. `booted` is refused too (exit 1): with two simulators booted it would pick either; pass a
@@ -186,7 +244,7 @@ writes the app alone. Each write is atomic: a temporary file beside the target, 
 - A `local` file that `git check-ignore` does not ignore gets a warning naming the line to add; the
   write still happens.
 
-### `devpin use [--slot S] [--only-root] --reset`
+### `devpin use [--slot S] [--only-root | [--packages <glob>]…] --reset`
 
 Removes `local` (or `S.local`) in the same repositories, so `default`, or the main slot, applies again.
 
@@ -198,9 +256,10 @@ as `use` resolves it), and appends `.devpin/*local` to `.gitignore`. When the `c
 what it kept. The root is the `--root` directory, else the top of the enclosing git repository, else the
 working directory.
 
-### `devpin check`
+### `devpin check [--packages <glob>]…`
 
-Fails on a device written into a command. See the next section. Exit 0 clean, 1 findings.
+Fails on a device written into a command, or on a slot the project does not declare. See the next
+section. Exit 0 clean, 1 findings.
 
 ### `devpin --version`
 
@@ -210,7 +269,8 @@ Prints the version.
 
 A device written into a command bypasses the choice: `devpin use` moves every build to a new device, and
 that one command keeps building on the old one, or fails on a machine without it. `devpin check` finds
-such commands so that a project can fail on them.
+such commands so that a project can fail on them. It finds a slot no one declared in the same way, since
+a command that names one gets the main device, or a refusal, instead of the second device it meant.
 
 **What is read.** In the app and in every package of `config`, every text file git counts as part of the
 repository, at any depth: tracked files and new files not yet added (`git ls-files -co
@@ -219,17 +279,25 @@ git repository, a walk of the tree that skips `.git`, `.build`, `DerivedData`, `
 skipped: `.devpin/`, binary files and the paths of `check-ignore`. Extensions do not matter: a device is
 written into scripts, Makefiles, CI files, Markdown with commands in it, Swift.
 
-**What counts as a finding**, a device in the role of a destination:
+**What counts as a finding**, a device in the role of a destination, or a slot no one declared:
 
 - a literal `key=value` after `-destination`;
 - `name=` or `id=` inside a `platform=…` string, unless the value is `$…` or `<…>`;
-- a literal value assigned to `DESTINATION`, `DEST` or `SIMULATOR` with `=`, `:=`, `?=` or `+=`.
+- a literal value assigned to `DESTINATION`, `DEST` or `SIMULATOR` with `=`, `:=`, `?=` or `+=`;
+- a slot the app does not declare: `--slot X` or `--slot=X` (quotes around `X` dropped) on a line where
+  the word `devpin` comes before it, and `DEVPIN_DESTINATION_X`, assigned or read. The slots declared are
+  the `slot` lines of the app's `config` and the `S.default` files of its `.devpin/`; `S.local` does not
+  count, being one machine's choice. A name is read up to the first character a slot name cannot hold.
+  `DEVPIN_DESTINATION` with no suffix is the main slot, never a finding, and the suffix is read in lower
+  case, `_` as `-`: `DEVPIN_DESTINATION_MY_RUNNER` is slot `my-runner`.
 
 **What passes:** a destination that names only the host platform (macOS) or is `generic/…`, also
 when assigned (`DESTINATION=generic/platform=iOS`); a key whose value is a variable, a command
 substitution or a placeholder (`-destination "$(devpin get)"`, `-destination "id=$UDID"`); a device
 value that is Swift interpolation, a `printf` format or a template (`\(udid)`, `%s`, `{{device}}`); and a
-device in prose ("measured on iPhone 17 Pro").
+device in prose ("measured on iPhone 17 Pro"). A slot whose name starts with `$` or `<` is a
+placeholder in documentation (`--slot $SLOT`, `--slot <slot>`, `DEVPIN_DESTINATION_${name}`). A
+`--slot` on a line without the word `devpin` belongs to another tool.
 
 A literal assigned to `DESTINATION`, `DEST` or `SIMULATOR` is a finding whatever it holds: `DEST=dist`
 in a Makefile is reported too. Name such a file in `check-ignore`, or rename the variable.
@@ -237,19 +305,29 @@ in a Makefile is reported too. Name such a file in `check-ignore`, or rename the
 A repository that git cannot read (a damaged `.git`, a `GIT_DIR` pointing nowhere) is not reported
 clean: `check` exits 1 and names it.
 
-**Output.** `path:line:text` per finding, grouped by repository and relative to the app's root, then a
-total and the fix. Colour only when stdout is a terminal.
+**Output.** `path:line:text` per finding, grouped by repository and relative to the app's root; a line
+holding both kinds is printed once. Then, on stderr, a total with its fix for each kind found; the
+slot line names every undeclared slot, and the fix names the first. Colour only when stdout is a
+terminal. A clean run prints `✓ No hardcoded destination or undeclared slot in N repositories.`
 
 ```
 $ devpin check
 ✗ MyApp
 build.sh:1:xcodebuild test -scheme MyApp -destination "platform=iOS Simulator,name=iPhone 17 Pro"
+✗ ../packages/pkgA
+../packages/pkgA/docs/run.md:1:devpin get --slot runer
 devpin: 1 hardcoded destinations — take the device from devpin get, or write it into .devpin/default
+devpin: 1 undeclared slot (runer) — declare it with 'slot runer' in MyApp/.devpin/config, or fix the spelling
 ```
 
+**Run it from the app.** Only the app knows the slots, so the slot finding needs its `config`. In a
+repository without a `.devpin/config`, a package for one, `check` skips that rule, and when a file it
+reads holds `--slot` it says so on stderr, exit code unchanged: `devpin: slots are not checked here —
+no .devpin/config; run devpin check from the project root`.
+
 Where to run it is the project's choice: in CI, in a pre-commit hook, on the first line of a build
-script. devpin wires it into nothing. Run it from the app; `check-ignore` keeps out what should not be
-read, such as documentation that quotes a command.
+script. devpin wires it into nothing. `check-ignore` keeps out what should not be read, such as
+documentation that quotes a command.
 
 ## Use from scripts and from spine
 

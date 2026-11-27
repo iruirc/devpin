@@ -6,6 +6,20 @@ All notable changes to devpin are listed here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `devpin check` finds a slot the project root does not declare: `--slot X` on a line that names
+  `devpin`, and `DEVPIN_DESTINATION_X`, in the files of the app and of its packages.
+- `--packages <glob>` on `show`, `use` and `check`, and `DEVPIN_PACKAGES`, replace the list of packages
+  of `config`; a relative glob is taken from the working directory.
+
+### Changed
+
+- A slot in a repository without `.devpin/config`, a package for one, falls back to the main device,
+  with a warning from `get`, instead of being refused as unknown.
+- `devpin check` prints `✓ No hardcoded destination or undeclared slot in N repositories.` when clean,
+  and a second total line when slots are found.
+
 ## 1.0.0 — 2026-11-26
 
 ### Added
