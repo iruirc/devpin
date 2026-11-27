@@ -30,6 +30,18 @@ show_tree() {
   printf '%s\n' "$app"
 }
 
+@test "show from the root and get in a package agree on an undeclared slot" {
+  app=$(show_tree)
+  cd "$app"
+  run --separate-stderr devpin show
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "$(row ../packages/pkgA runner main "$A (Test Phone (dup))")"
+  cd "$WORK/packages/pkgA"
+  run --separate-stderr devpin get --slot runner
+  [ "$status" -eq 0 ]
+  [ "$output" = "$A" ]
+}
+
 @test "reports every repository and slot" {
   app=$(show_tree)
   cd "$app"

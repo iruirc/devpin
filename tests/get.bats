@@ -194,11 +194,49 @@ expect_slot_value() {
   assert_contains "$stderr" "devpin: unknown slot 'runer' — known: other, runner, ui; check the spelling, or declare it with 'slot runer' in .devpin/config"
 }
 
-@test "an undeclared slot with none known says so" {
+@test "with config an undeclared slot with none known says so" {
+  put "$WORK/repo" config 'requires 1.0'
   put "$WORK/repo" default "$DEFAULT_DEST"
   run --separate-stderr devpin get --slot runner
   [ "$status" -eq 1 ]
   assert_contains "$stderr" "devpin: unknown slot 'runner' — known: none; check the spelling, or declare it with 'slot runner' in .devpin/config"
+}
+
+@test "without config an undeclared slot takes the main device and warns" {
+  put "$WORK/repo" default "$DEFAULT_DEST"
+  run --separate-stderr devpin get --slot runner
+  [ "$status" -eq 0 ]
+  [ "$output" = "$DEFAULT_DEST" ]
+  [ "$stderr" = "devpin: slot 'runner' is not declared in this repository — using the main device; the project root declares its slots" ]
+}
+
+@test "without config a slot file gives its value without a warning" {
+  put "$WORK/repo" default "$DEFAULT_DEST"
+  put "$WORK/repo" runner.local "$B"
+  run --separate-stderr devpin get --slot runner
+  [ "$status" -eq 0 ]
+  [ "$output" = "$B" ]
+  [ -z "$stderr" ]
+}
+
+@test "without config the slot variable gives its value without a warning" {
+  put "$WORK/repo" default "$DEFAULT_DEST"
+  export DEVPIN_DESTINATION_RUNNER="$B"
+  run --separate-stderr devpin get --slot runner
+  [ "$status" -eq 0 ]
+  [ "$output" = "$B" ]
+  [ -z "$stderr" ]
+}
+
+@test "without config a malformed slot name is still a wrong invocation" {
+  put "$WORK/repo" default "$DEFAULT_DEST"
+  local name
+  for name in Runner run_ner; do
+    run --separate-stderr devpin get --slot "$name"
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+    assert_contains "$stderr" "Usage:"
+  done
 }
 
 @test "a malformed slot name is a wrong invocation" {

@@ -165,6 +165,7 @@ CFG_SLOTS=()
 CFG_PACKAGES=()
 CFG_IGNORE=()
 CFG_REQUIRES=""
+CFG_PRESENT=0
 SLOT_RE='^[a-z0-9][a-z0-9-]*$'   # a slot name: a-z, 0-9 and -, never starting with -
 
 # version_ge <a> <b>: succeeds when version a >= version b, compared part by part as numbers;
@@ -181,12 +182,14 @@ version_ge() {
 }
 
 # load_config <root>: reads <root>/.devpin/config into CFG_SLOTS, CFG_PACKAGES, CFG_IGNORE and
-# CFG_REQUIRES. A missing config is an empty one. Dies on the first parse error, except that a
-# project requiring a newer devpin is reported as that, whatever else the file holds.
+# CFG_REQUIRES, and sets CFG_PRESENT (1 when the file exists, else 0). A missing config is an empty
+# one. Dies on the first parse error, except that a project requiring a newer devpin is reported as
+# that, whatever else the file holds.
 load_config() {
   local root=$1 file=$1/.devpin/config
-  CFG_SLOTS=(); CFG_PACKAGES=(); CFG_IGNORE=(); CFG_REQUIRES=""
+  CFG_SLOTS=(); CFG_PACKAGES=(); CFG_IGNORE=(); CFG_REQUIRES=""; CFG_PRESENT=0
   [[ -f $file ]] || return 0
+  CFG_PRESENT=1
 
   local line word arg n=0 parse_err="" req_err=""
   while IFS= read -r line || [[ -n $line ]]; do
@@ -253,10 +256,12 @@ known_slots() {
   KNOWN_SLOTS=( ${(ou)all} )
 }
 
-# check_slot <repo> <slot>: a malformed name is a wrong invocation; an unknown one is refused.
+# check_slot <repo> <slot>: a malformed name is a wrong invocation; in a repository with a config
+# an unknown one is refused, without one any valid name is accepted.
 check_slot() {
   local repo=$1 slot=$2
   [[ $slot =~ $SLOT_RE ]] || usage
+  (( CFG_PRESENT )) || return 0
   known_slots "$repo"
   (( ${KNOWN_SLOTS[(Ie)$slot]} )) && return 0
   local list=none
@@ -528,6 +533,15 @@ write_atomic() {
 
 # ---------------------------------------------------------------- commands
 
+# warn_undeclared_slot <slot>: in a repository without a config, a slot that came from the main
+# device and has no file of its own is most likely a typo; say so, once the value is settled.
+warn_undeclared_slot() {
+  local slot=$1
+  (( ! CFG_PRESENT )) && [[ -n $slot && $RES_SOURCE == main ]] || return 0
+  [[ -e $ROOT/.devpin/$slot.local || -e $ROOT/.devpin/$slot.default ]] && return 0
+  print -u2 -r -- "devpin: slot '$slot' is not declared in this repository — using the main device; the project root declares its slots"
+}
+
 cmd_get() {
   local slot=""
   while (( $# > 0 )); do
@@ -554,6 +568,7 @@ cmd_get() {
 
   local id reason hint
   if ! id=$(destination_id "$RES_VALUE"); then
+    warn_undeclared_slot "$slot"
     print -r -- "$RES_VALUE"
     return 0
   fi
@@ -572,6 +587,7 @@ cmd_get() {
   else
     die "no simulator or paired device with id $id on this machine — $hint"
   fi
+  warn_undeclared_slot "$slot"
   print -r -- "$RES_VALUE"
 }
 DESCRIBED=""

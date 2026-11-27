@@ -287,6 +287,22 @@ R_DEV() { printf '%s,id=%s' "$DEV" "$DEV_ID"; }
   expect_clean_trees "$app" "$WORK/t/packages/pkgA" "$WORK/t/packages/pkgB"
 }
 
+@test "in a package without config a slot needs no declaration" {
+  make_package "$WORK/pkg"
+  put "$WORK/pkg" default "$DEFAULT_DEST"
+  cd "$WORK/pkg"
+  run --separate-stderr devpin use --slot runner 'Dev Phone'
+  [ "$status" -eq 0 ]
+  [ "$(cat .devpin/runner.local)" = "$(R_DEV)" ]
+  run --separate-stderr devpin use --slot runner --reset
+  [ "$status" -eq 0 ]
+  [ ! -e .devpin/runner.local ]
+  run --separate-stderr devpin get --slot runner
+  [ "$status" -eq 0 ]
+  [ "$output" = "$DEFAULT_DEST" ]
+  [ "$stderr" = "devpin: slot 'runner' is not declared in this repository — using the main device; the project root declares its slots" ]
+}
+
 @test "slot and reset" {
   local app; app=$(tree "$WORK/t")
   put "$app" config $'packages ../packages/*\nslot runner'
