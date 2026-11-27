@@ -6,6 +6,8 @@ All notable changes to devpin are listed here. The format follows
 
 ## Unreleased
 
+## 1.1.0 — 2026-11-27
+
 ### Added
 
 - `devpin check` finds a slot the project root does not declare: `--slot X` on a line that names

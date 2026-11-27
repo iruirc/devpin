@@ -2,7 +2,7 @@
 # devpin - keeps the xcodebuild destination of a repository in .devpin/
 setopt no_unset pipe_fail extended_glob
 
-DEVPIN_VERSION="1.0.0"
+DEVPIN_VERSION="1.1.0"
 
 # ---------------------------------------------------------------- messages
 
