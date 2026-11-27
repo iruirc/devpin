@@ -20,7 +20,7 @@ Usage: devpin [--root <dir>] <command>
   use [--slot S] [--only-root | [--packages <glob>]…] --reset
                                           remove it
   init [--default <device>]               create .devpin/
-  check [--packages <glob>]…              find devices written into commands
+  check [--packages <glob>]…              find devices and undeclared slots written into commands
   --version
 USAGE
 }

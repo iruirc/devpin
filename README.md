@@ -13,7 +13,7 @@ xcodebuild test -scheme MyApp -destination "$(devpin get)"
   in a committed one;
 - **packages follow the app** — `devpin use "iPhone 17 Pro"` writes the choice into the app and every
   package listed in its `config`, beside it (`../packages/*`) or inside it (`packages/*`), or in the
-  list given by `--packages`;
+  list given by `--packages` or `DEVPIN_PACKAGES`;
 - **named slots** — a second device, for an on-device test runner for example, falling back to the main
   one when not set;
 - **a hardcode check** — `devpin check` fails on a device written into a command anywhere else.
@@ -73,8 +73,8 @@ check-ignore Docs/**    paths check does not read, relative to the root
 - `requires` takes `major.minor` or `major.minor.patch`, compared part by part as numbers (a project
   requiring `1.10` refuses devpin 1.9.0); a missing part counts as 0. A project that needs a newer
   devpin is reported as that, whatever else its `config` holds.
-- A slot name is `a-z`, `0-9` and `-`, and does not start with `-`; any other name is a wrong
-  invocation (exit 2) in every repository.
+- A slot name is `a-z`, `0-9` and `-`, and does not start with `-`; any other name in a `slot` line is
+  an error naming the line (see *Resolution* for `--slot` on the command line).
 - `packages` matches that hold no `Package.swift` are skipped, and `devpin show` names them. A pattern
   that matches nothing warns. No `packages` line means the root alone. `--packages` and
   `DEVPIN_PACKAGES` replace the list (see *Packages elsewhere*).
@@ -272,7 +272,8 @@ that one command keeps building on the old one, or fails on a machine without it
 such commands so that a project can fail on them. It finds a slot no one declared in the same way, since
 a command that names one gets the main device, or a refusal, instead of the second device it meant.
 
-**What is read.** In the app and in every package of `config`, every text file git counts as part of the
+**What is read.** In the app and in every package of the list (the `packages` of `config`, or
+`--packages` or `DEVPIN_PACKAGES`; see *Packages elsewhere*), every text file git counts as part of the
 repository, at any depth: tracked files and new files not yet added (`git ls-files -co
 --exclude-standard`), and nothing `.gitignore` excludes (`.build`, `DerivedData` and the like). Outside a
 git repository, a walk of the tree that skips `.git`, `.build`, `DerivedData`, `*.xcodeproj`. Always
@@ -296,8 +297,9 @@ when assigned (`DESTINATION=generic/platform=iOS`); a key whose value is a varia
 substitution or a placeholder (`-destination "$(devpin get)"`, `-destination "id=$UDID"`); a device
 value that is Swift interpolation, a `printf` format or a template (`\(udid)`, `%s`, `{{device}}`); and a
 device in prose ("measured on iPhone 17 Pro"). A slot whose name starts with `$` or `<` is a
-placeholder in documentation (`--slot $SLOT`, `--slot <slot>`, `DEVPIN_DESTINATION_${name}`). A
-`--slot` on a line without the word `devpin` belongs to another tool.
+placeholder in documentation (`--slot $SLOT`, `--slot <slot>`, `DEVPIN_DESTINATION_${name}`); only
+those pass, so `--slot S` or `--slot NAME` in prose is read as the slot `S` or `NAME`: write
+`--slot <slot>`. A `--slot` on a line without the word `devpin` belongs to another tool.
 
 A literal assigned to `DESTINATION`, `DEST` or `SIMULATOR` is a finding whatever it holds: `DEST=dist`
 in a Makefile is reported too. Name such a file in `check-ignore`, or rename the variable.
@@ -322,7 +324,8 @@ devpin: 1 undeclared slot (runer) — declare it with 'slot runer' in MyApp/.dev
 
 **Run it from the app.** Only the app knows the slots, so the slot finding needs its `config`. In a
 repository without a `.devpin/config`, a package for one, `check` skips that rule, and when a file it
-reads holds `--slot` it says so on stderr, exit code unchanged: `devpin: slots are not checked here —
+reads holds `--slot` after the word `devpin` (not for `DEVPIN_DESTINATION_X`) it says so on stderr, exit
+code unchanged: `devpin: slots are not checked here —
 no .devpin/config; run devpin check from the project root`.
 
 Where to run it is the project's choice: in CI, in a pre-commit hook, on the first line of a build

@@ -19,6 +19,8 @@ All notable changes to devpin are listed here. The format follows
   with a warning from `get`, instead of being refused as unknown.
 - `devpin check` prints `✓ No hardcoded destination or undeclared slot in N repositories.` when clean,
   and a second total line when slots are found.
+- `devpin check` reads a slot as declared only from a `slot` line or an `S.default` in the app's
+  `.devpin/`; a slot known only from `S.local` there is now reported.
 
 ## 1.0.0 — 2026-11-26
 
